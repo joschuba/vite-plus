@@ -487,7 +487,9 @@ setup_node_manager() {
   # Prompt user in interactive mode
   if [ -e /dev/tty ] && [ -t 1 ]; then
     echo ""
-    echo "Would you want Vite+ to manage Node.js versions?"
+    echo "Would you like Vite+ to manage your Node.js versions?"
+    echo "It adds \`node\`, \`npm\`, and \`npx\` shims to ~/.vite-plus/bin/ and automatically uses the right version."
+    echo "Opt out anytime with \`vp env off\`."
     echo -n "Press Enter to accept (Y/n): "
     read -r response < /dev/tty
 
@@ -623,24 +625,25 @@ main() {
   fi
 
   # Generate wrapper package.json that declares vite-plus as a dependency.
-  # npm will install vite-plus and all transitive deps via `vp install`.
+  # pnpm will install vite-plus and all transitive deps via `vp install`.
+  # The packageManager field pins pnpm to a known-good version, ensuring
+  # consistent behavior regardless of the user's global pnpm version.
   cat > "$VERSION_DIR/package.json" <<WRAPPER_EOF
 {
   "name": "vp-global",
   "version": "$VP_VERSION",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "dependencies": {
     "vite-plus": "$VP_VERSION"
   }
 }
 WRAPPER_EOF
 
-  # Isolate from user's global package manager config that may block
-  # installing recently-published packages (e.g. pnpm's minimumReleaseAge,
-  # npm's min-release-age) by creating a local .npmrc in the version directory.
+  # Isolate from pnpm's global config that may block installing
+  # recently-published packages (e.g. minimumReleaseAge).
   cat > "$VERSION_DIR/.npmrc" <<NPMRC_EOF
 minimum-release-age=0
-min-release-age=0
 NPMRC_EOF
 
   # Install production dependencies (skip if VP_SKIP_DEPS_INSTALL is set,

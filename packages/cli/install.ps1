@@ -249,7 +249,9 @@ function Setup-NodeManager {
     $isInteractive = [Environment]::UserInteractive
     if ($isInteractive) {
         Write-Host ""
-        Write-Host "Would you want Vite+ to manage Node.js versions?"
+        Write-Host "Would you like Vite+ to manage your Node.js versions?"
+        Write-Host "It adds ``node``, ``npm``, and ``npx`` shims to ~/.vite-plus/bin/ and automatically uses the right version."
+        Write-Host "Opt out anytime with ``vp env off``."
         $response = Read-Host "Press Enter to accept (Y/n)"
 
         if ($response -eq '' -or $response -eq 'y' -or $response -eq 'Y') {
@@ -349,21 +351,22 @@ function Main {
     }
 
     # Generate wrapper package.json that declares vite-plus as a dependency.
-    # npm will install vite-plus and all transitive deps via `vp install`.
+    # pnpm will install vite-plus and all transitive deps via `vp install`.
+    # The packageManager field pins pnpm to a known-good version.
     $wrapperJson = @{
         name = "vp-global"
         version = $ViteVersion
         private = $true
+        packageManager = "pnpm@10.33.0"
         dependencies = @{
             "vite-plus" = $ViteVersion
         }
     } | ConvertTo-Json -Depth 10
     Set-Content -Path (Join-Path $VersionDir "package.json") -Value $wrapperJson
 
-    # Isolate from user's global package manager config that may block
-    # installing recently-published packages (e.g. pnpm's minimumReleaseAge,
-    # npm's min-release-age) by creating a local .npmrc in the version directory.
-    Set-Content -Path (Join-Path $VersionDir ".npmrc") -Value "minimum-release-age=0`nmin-release-age=0"
+    # Isolate from pnpm's global config that may block installing
+    # recently-published packages (e.g. minimumReleaseAge).
+    Set-Content -Path (Join-Path $VersionDir ".npmrc") -Value "minimum-release-age=0"
 
     # Install production dependencies (skip if VP_SKIP_DEPS_INSTALL is set,
     # e.g. during local dev where install-global-cli.ts handles deps separately)
@@ -371,8 +374,9 @@ function Main {
         $installLog = Join-Path $VersionDir "install.log"
         Push-Location $VersionDir
         try {
-            $env:CI = "true"
-            & "$BinDir\vp.exe" install --silent *> $installLog
+            # Use cmd /c so CI=true is scoped to the child process only,
+            # avoiding leaking it into the user's shell session.
+            cmd /c "set CI=true && `"$BinDir\vp.exe`" install --silent" *> $installLog
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "error: Failed to install dependencies. See log for details: $installLog" -ForegroundColor Red
                 exit 1
