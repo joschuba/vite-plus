@@ -17,5 +17,10 @@ Compare the upstream `tsdown` CLI options with `vp pack` (defined in `packages/c
 5. Preserve intentional differences:
    - `-c, --config` is intentionally commented out (vp pack uses vite.config.ts)
    - `--env-prefix` has a different default (`['VITE_PACK_', 'TSDOWN_']`)
-6. Verify with `pnpm --filter vite-plus build-ts` and `vp pack -h`
-7. If new parameters were added, add a corresponding PTY snapshot case under `crates/vite_cli_snapshots/tests/cli_snapshots/fixtures/` to verify the new option works correctly
+6. Keep runtime differences separate from the static help document. If an affected
+   item is retained in `packages/cli/src/help.ts`, follow
+   `.claude/skills/sync-upstream-cli-help/SKILL.md` and copy tsdown's label and
+   description verbatim, even when Vite+ intentionally uses a different runtime
+   default. Do not paraphrase the mirrored help to explain the wrapper behavior.
+7. Verify with `pnpm --filter vite-plus build-ts` and `vp pack -h`
+8. If new parameters were added, add a corresponding PTY snapshot case under `crates/vite_cli_snapshots/tests/cli_snapshots/fixtures/` to verify the new option works correctly
