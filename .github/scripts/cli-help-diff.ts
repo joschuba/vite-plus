@@ -1,7 +1,14 @@
 /// <reference types="node" />
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
@@ -23,6 +30,16 @@ type ToolSnapshot = {
 type Snapshot = {
   tools: Record<ToolName, ToolSnapshot>;
 };
+
+type VersionMetadata = Partial<
+  Record<
+    ToolName,
+    {
+      new: string;
+      tag?: string;
+    }
+  >
+>;
 
 const ROOT = process.cwd();
 const WORKSPACE_PATH = join(ROOT, 'pnpm-workspace.yaml');
@@ -66,7 +83,16 @@ function readJson(filePath: string): unknown {
   return JSON.parse(readFileSync(filePath, 'utf8'));
 }
 
-function readToolVersion(tool: Tool): string {
+function readToolVersion(tool: Tool, versions?: VersionMetadata): string {
+  if (versions) {
+    const change = versions[tool.name];
+    const version = tool.name === 'vite' ? change?.tag?.replace(/^v/, '') : change?.new;
+    if (!version) {
+      throw new Error(`Upgrade metadata has no target version for ${tool.name}`);
+    }
+    return version;
+  }
+
   if (tool.name === 'vite') {
     const pkg = readJson(join(ROOT, 'vite/packages/vite/package.json')) as { version?: unknown };
     if (typeof pkg.version !== 'string') {
@@ -122,10 +148,11 @@ function captureToolHelp(tool: Tool, version: string): string {
     .join('\n\n');
 }
 
-function captureSnapshot(outputPath: string): void {
+function captureSnapshot(outputPath: string, versionsPath?: string): void {
+  const versions = versionsPath ? (readJson(versionsPath) as VersionMetadata) : undefined;
   const tools = {} as Record<ToolName, ToolSnapshot>;
   for (const tool of TOOLS) {
-    const version = readToolVersion(tool);
+    const version = readToolVersion(tool, versions);
     console.log(`Capturing ${tool.title} ${version} help...`);
     tools[tool.name] = {
       help: captureToolHelp(tool, version),
@@ -184,8 +211,8 @@ function truncateDiff(diff: string): string {
   return `${diff.slice(0, MAX_DIFF_LENGTH)}\n... diff truncated to fit in one GitHub comment ...`;
 }
 
-function renderReport(before: Snapshot, after: Snapshot): string {
-  const changedTools = TOOLS.filter((tool) => {
+function hasHelpChanges(before: Snapshot, after: Snapshot): boolean {
+  return TOOLS.some((tool) => {
     const previous = before.tools[tool.name];
     const current = after.tools[tool.name];
     return (
@@ -194,8 +221,11 @@ function renderReport(before: Snapshot, after: Snapshot): string {
         normalizeOutput(current.help, current.version)
     );
   });
+}
+
+function renderReport(before: Snapshot, after: Snapshot, hasChanges: boolean): string {
   const lines = [
-    changedTools.length > 0
+    hasChanges
       ? '## ⚠️ Upstream CLI help changes detected'
       : '## ✅ No upstream CLI help changes detected',
     '',
@@ -239,11 +269,20 @@ function renderReport(before: Snapshot, after: Snapshot): string {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function generateReport(beforePath: string, afterPath: string, outputPath: string): void {
+function generateReport(
+  beforePath: string,
+  afterPath: string,
+  outputPath: string,
+  githubOutputPath?: string,
+): void {
   const before = readJson(beforePath) as Snapshot;
   const after = readJson(afterPath) as Snapshot;
+  const hasChanges = hasHelpChanges(before, after);
   mkdirSync(dirname(outputPath), { recursive: true });
-  writeFileSync(outputPath, renderReport(before, after));
+  writeFileSync(outputPath, renderReport(before, after, hasChanges));
+  if (githubOutputPath) {
+    appendFileSync(githubOutputPath, `has-changes=${hasChanges}\n`);
+  }
   console.log(`Wrote CLI help report to ${outputPath}`);
 }
 
@@ -252,17 +291,19 @@ const { positionals, values } = parseArgs({
   options: {
     after: { type: 'string' },
     before: { type: 'string' },
+    'github-output': { type: 'string' },
     output: { short: 'o', type: 'string' },
+    versions: { type: 'string' },
   },
 });
 const [command] = positionals;
 
 if (command === 'capture' && values.output) {
-  captureSnapshot(values.output);
+  captureSnapshot(values.output, values.versions);
 } else if (command === 'report' && values.before && values.after && values.output) {
-  generateReport(values.before, values.after, values.output);
+  generateReport(values.before, values.after, values.output, values['github-output']);
 } else {
   throw new Error(
-    'Usage: cli-help-diff.ts capture --output <file> | report --before <file> --after <file> --output <file>',
+    'Usage: cli-help-diff.ts capture --output <file> [--versions <file>] | report --before <file> --after <file> --output <file> [--github-output <file>]',
   );
 }

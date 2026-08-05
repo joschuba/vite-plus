@@ -21,6 +21,7 @@ test('reports changed, unchanged, and not-updated CLI help in one comment', () =
   tempDirs.push(tempDir);
   const beforePath = join(tempDir, 'before.json');
   const afterPath = join(tempDir, 'after.json');
+  const githubOutputPath = join(tempDir, 'github-output.txt');
   const reportPath = join(tempDir, 'report.md');
   const before = {
     tools: {
@@ -45,7 +46,18 @@ test('reports changed, unchanged, and not-updated CLI help in one comment', () =
 
   execFileSync(
     process.execPath,
-    [SCRIPT_PATH, 'report', '--before', beforePath, '--after', afterPath, '--output', reportPath],
+    [
+      SCRIPT_PATH,
+      'report',
+      '--before',
+      beforePath,
+      '--after',
+      afterPath,
+      '--output',
+      reportPath,
+      '--github-output',
+      githubOutputPath,
+    ],
     { cwd: resolve(import.meta.dirname, '../../..') },
   );
 
@@ -59,4 +71,41 @@ test('reports changed, unchanged, and not-updated CLI help in one comment', () =
   expect(report).toContain('+--new-option');
   expect(report).not.toContain('-vite/1.0.0');
   expect(report).not.toContain('+vite/2.0.0');
+  expect(readFileSync(githubOutputPath, 'utf8')).toBe('has-changes=true\n');
+});
+
+test('reports no machine-readable changes when help is unchanged', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'vite-plus-cli-help-test-'));
+  tempDirs.push(tempDir);
+  const snapshotPath = join(tempDir, 'snapshot.json');
+  const githubOutputPath = join(tempDir, 'github-output.txt');
+  const reportPath = join(tempDir, 'report.md');
+  const snapshot = {
+    tools: Object.fromEntries(
+      ['vite', 'vitest', 'oxlint', 'oxfmt', 'tsdown'].map((tool) => [
+        tool,
+        { help: `${tool}/1.0.0\n--help`, version: '1.0.0' },
+      ]),
+    ),
+  };
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+
+  execFileSync(
+    process.execPath,
+    [
+      SCRIPT_PATH,
+      'report',
+      '--before',
+      snapshotPath,
+      '--after',
+      snapshotPath,
+      '--output',
+      reportPath,
+      '--github-output',
+      githubOutputPath,
+    ],
+    { cwd: resolve(import.meta.dirname, '../../..') },
+  );
+
+  expect(readFileSync(githubOutputPath, 'utf8')).toBe('has-changes=false\n');
 });
