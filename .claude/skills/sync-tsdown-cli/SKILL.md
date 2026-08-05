@@ -17,4 +17,5 @@ Runtime options live in `packages/cli/src/pack-bin.ts`; static help lives in
 4. For static labels and descriptions, follow `sync-upstream-cli-help`; do not adapt
    upstream wording to explain runtime differences.
 5. Run `pnpm --filter vite-plus build-ts` and `vp pack -h`. Add a focused PTY snapshot
-   case when a new runtime option is exposed.
+   case under `crates/vp_cli_snapshots/tests/cli_snapshots/fixtures/` when a new runtime
+   option is exposed.
