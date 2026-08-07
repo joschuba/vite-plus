@@ -72,10 +72,19 @@ Cold install (standalone CLIs; store, cache, and `node_modules` wiped; live netw
 - CI installs do not get the headline number. aube forces per-project mode when `CI=1`. The CI-relevant comparison is the GVS-off row, where aube holds no lead over pnpm 11.
 - The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the GVS-off row by design.
 - aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. Repeat installs are aube's weak scenario: 268-290 ms in every aube setup, against 204 ms for vp + pnpm 11 and 20 ms for vp + pnpm 12.
-- The pnpm 12 RC default (non-GVS) warm result (11.2 s through vp, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
+- The pnpm 12 RC default (non-GVS) warm result (11.2 s through vp) is an RC regression on macOS, not a design property. See "Why the pnpm 12 RC default is slow" below. Retest it at stable.
 - CLI startup stays out of this comparison. vp dispatch wraps every engine, and the repeat-install row already captures the end-to-end floor per tool.
 - nub runs the same engine as aube but wins every repeat-install comparison against it: 132 ms with GVS on, 24 ms with GVS off. nub puts a staleness check in front of the engine and skips the store revalidation when the state file is fresh. Without the global store to revalidate, that check is nearly as fast as pnpm 12's native short circuit. vp can copy the check for either engine.
 - nub's warm GVS-off result (1.65 s) beats aube's own GVS-off path (3.02 s) by 1.8x. nub vendors a newer engine build with a different per-project linker; the gap deserves a look before vp copies either.
+
+### Why the pnpm 12 RC default is slow
+
+pnpm 12 should not lose to pnpm 11, and at the mechanism level it does not: the slow row is one unfinished code path, the default (non-GVS) materialization of `node_modules` on macOS. We probed it on the same fixture (2026-08-08):
+
+- The timing signature: the same warm install costs pnpm 11 about 8-11 s of kernel time; the pnpm 12 RC costs 141-152 s of kernel time across ~13 threads, inside 11 s of wall clock.
+- The disk signature: one warm install adds 81 MB of disk blocks under pnpm 11 but 296 MB under pnpm 12. Both produce per-file inodes (no hardlinks into the store), so pnpm 11's clone path shares blocks through APFS while the RC's Rust materializer writes about 4x the physical data for the same tree.
+
+Three facts say this is temporary. The v12 rollout is staged, and the team lists warm and frozen install optimization as post-v12 work. The RC release notes still land fixes in this exact path (directory-swap races in the shared-store materializer). And the paths pnpm's own headline numbers come from are fast in our table too: the 20 ms repeat install and the 579 ms GVS row. Judge pnpm 12 by those two rows; treat the 11.2 s row as a bug to retest at stable. We have not found an upstream issue that tracks the macOS regression; file one with these numbers.
 
 ## 3. Features
 
