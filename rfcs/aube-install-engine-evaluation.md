@@ -45,8 +45,10 @@ This mirrors the aube methodology with one deliberate change: aube runs on the p
 | Scenario | aube (GVS on, default) | pnpm 12 RC + GVS | pnpm 11 (default) | aube, GVS off | pnpm 12 RC (default) |
 | --- | --- | --- | --- | --- | --- |
 | Warm install, `node_modules` wiped | **371 ms** | 529 ms | 2.65 s | 3.08 s | 9.72 s |
-| No-op `install` on installed tree | 290 ms | n/a | 200 ms | n/a | **10 ms** |
-| CLI startup (`--version`) | **6.7 ms** | n/a | 177 ms | n/a | n/a |
+| No-op `install` on installed tree | 290 ms | **9.1 ms** | 200 ms | 270 ms | **10 ms** |
+| CLI startup (`--version`) | **6.7 ms** | same binary | 177 ms | same binary | ~0.7-0.9 s, high variance |
+
+Startup notes. The GVS columns share the binary of their default columns, so startup cannot differ there. The pnpm 12 RC binary answers a no-op install in 10 ms but takes 0.7-0.9 s (sigma ~0.5 s) for `--version`: the Rust binary owns the install path and delegates other commands to the bundled JS CLI in this RC.
 
 Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x slower than pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store layout that wins warm installs does not help the first download.
 
@@ -58,7 +60,7 @@ Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnp
 - The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the slow column by design.
 - aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. A no-op `aube install` (290 ms) is slower than pnpm 11 (200 ms). The pnpm 12 RC wins this scenario outright at 10 ms.
 - The pnpm 12 RC default (non-GVS) warm result (9.7 s, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
-- Binary startup matters for `vp run`-style dispatch: aube starts 26x faster than pnpm's JS bootstrap. vp already pays this cost once per managed-pnpm invocation today.
+- Binary startup matters for `vp run`-style dispatch: aube starts 26x faster than pnpm 11's JS bootstrap. vp already pays this cost once per managed-pnpm invocation today. pnpm 12's native binary removes the cost on the install path, but its non-install commands still bootstrap the JS CLI in this RC.
 
 ## 3. Features
 
