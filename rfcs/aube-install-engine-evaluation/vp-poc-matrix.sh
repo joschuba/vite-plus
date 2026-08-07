@@ -77,7 +77,7 @@ hyperfine --warmup 1 --runs "$RUNS" --export-json "$P/warm.json" --prepare "$W" 
   -n "vp + embedded aube" "cd $P/aube && env $AUBE_ENV $VP install" \
   -n "nub (standalone)" "cd $P/nub && env $NUB_ENV $NUB install"
 
-echo "== no-op install =="
+echo "== repeat install (already installed) =="
 hyperfine --warmup 1 --runs "$RUNS" --export-json "$P/noop.json" \
   -n "vp + managed pnpm 11" "cd $P/pnpm11 && $VP install" \
   -n "vp + managed pnpm $PNPM12_VERSION" "cd $P/pnpm12 && $VP install" \

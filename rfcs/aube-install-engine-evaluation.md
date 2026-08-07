@@ -44,7 +44,12 @@ This mirrors the aube methodology with one deliberate change: aube runs on the p
 
 The primary comparison is the vp POC run of 2026-08-07: six setups, one hyperfine pass, vp v0.2.8 with the embed hook (appendix A). The pnpm setups run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
 
-| Setup | Warm install, `node_modules` wiped | No-op `install` |
+The two scenarios:
+
+- Warm install: the package store and cache are already full; `node_modules` is deleted before each run. This is "clone or branch-switch on a machine that installed before".
+- Repeat install: everything is installed and current; the command finds no work to do. This is "run `install` again to be safe", the most frequent case in a developer loop.
+
+| Setup | Warm install | Repeat install |
 | --- | --- | --- |
 | vp + embedded aube 1.37 (GVS on) | **374 ms** | 303 ms |
 | aube 1.37 CLI (standalone, GVS on) | 390 ms | 282 ms |
@@ -53,7 +58,7 @@ The primary comparison is the vp POC run of 2026-08-07: six setups, one hyperfin
 | vp + managed pnpm 11.20 | 3.41 s | 198 ms |
 | vp + managed pnpm 12 RC (default) | 10.6 s | 20 ms |
 
-Two engine-only data points come from the 2026-08-06 standalone matrix and support the analysis below: aube with GVS off lands at 3.08 s warm and 270 ms no-op, against standalone pnpm 11 at 2.65 s and 200 ms.
+Two engine-only data points come from the 2026-08-06 standalone matrix and support the analysis below: aube with GVS off lands at 3.08 s warm and 270 ms repeat, against standalone pnpm 11 at 2.65 s and 200 ms.
 
 Cold install (standalone CLIs, 2026-08-06 matrix; store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x slower than pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store layout that wins warm installs does not help the first download.
 
@@ -63,10 +68,10 @@ Cold install (standalone CLIs, 2026-08-06 matrix; store, cache, and `node_module
 - The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, aube (3.08 s) is at pnpm 11 level (2.65 s). pnpm 12 with its own GVS on stays within 1.6x of aube through vp (588 ms vs 374 ms).
 - CI installs do not get the headline number. aube forces per-project mode when `CI=1`. The CI-relevant comparison is the GVS-off column, where aube holds no lead over pnpm 11.
 - The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the slow column by design.
-- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. No-op installs are aube's weak scenario: 303 ms through vp and 282 ms standalone, against 198 ms for vp + pnpm 11 and 20 ms for vp + pnpm 12.
+- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. Repeat installs are aube's weak scenario: 303 ms through vp and 282 ms standalone, against 198 ms for vp + pnpm 11 and 20 ms for vp + pnpm 12.
 - The pnpm 12 RC default (non-GVS) warm result (10.6 s through vp, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
-- CLI startup stays out of this comparison. vp dispatch wraps every engine, and the no-op row already captures the end-to-end floor per tool.
-- nub runs the same engine as aube but answers a no-op install in 111 ms, against aube's 282 ms. nub puts a staleness check in front of the engine and skips the store revalidation when the state file is fresh. vp can copy that check for either engine.
+- CLI startup stays out of this comparison. vp dispatch wraps every engine, and the repeat-install row already captures the end-to-end floor per tool.
+- nub runs the same engine as aube but answers a repeat install in 111 ms, against aube's 282 ms. nub puts a staleness check in front of the engine and skips the store revalidation when the state file is fresh. vp can copy that check for either engine.
 
 ## 3. Features
 
@@ -121,7 +126,7 @@ Include these tests in any pilot.
 
 ## 5. The Rust pnpm alternative
 
-pnpm v12 reached RC on 2026-08-05. Our measurements confirm its direction: 10 ms no-op installs now, and 529 ms warm installs with the global virtual store on. It keeps pnpm's own lockfile semantics, policy engine, and config surface, so it carries no compatibility risk. Its open gaps are the RC regressions and the staged rollout (resolution stays in TypeScript for now). If the motive for aube is speed alone, pnpm 12 with `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer. vp already manages pnpm versions.
+pnpm v12 reached RC on 2026-08-05. Our measurements confirm its direction: 10 ms repeat installs now, and 529 ms warm installs with the global virtual store on. It keeps pnpm's own lockfile semantics, policy engine, and config surface, so it carries no compatibility risk. Its open gaps are the RC regressions and the staged rollout (resolution stays in TypeScript for now). If the motive for aube is speed alone, pnpm 12 with `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer. vp already manages pnpm versions.
 
 pnpm 12 does not give us:
 
@@ -157,7 +162,7 @@ POC-specific readings:
 
 - The embed path works and keeps the lockfile byte-identical. The nub and standalone-aube setups also return the lockfile untouched.
 - Embedded aube (374 ms warm) matches the standalone aube CLI (390 ms) within run noise. The in-process embed adds no measurable cost and removes a process spawn.
-- pnpm 12's native binary answers vp's no-op install in 20 ms, 15x faster than the aube embed path, which revalidates the shared store on every run.
+- pnpm 12's native binary answers vp's repeat install in 20 ms, 15x faster than the aube embed path, which revalidates the shared store on every run.
 - vp accepts a `packageManager: pnpm@12.0.0-rc.0` pin today, so the pnpm 12 upgrade path needs no vp code change.
 
 ## Appendix B: sources and artifacts

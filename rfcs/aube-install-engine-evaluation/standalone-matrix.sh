@@ -2,7 +2,7 @@
 # Standalone engine matrix: aube vs pnpm 11 vs pnpm 12 on one shared
 # pnpm-lock.yaml (the vp impersonation scenario).
 #
-# Scenarios: warm (store kept, node_modules wiped), no-op, cold (all wiped).
+# Scenarios: warm (store kept, node_modules wiped), repeat (already installed), cold (all wiped).
 # Setups: pnpm11, pnpm12, pnpm12+global-virtual-store, aube, aube without GVS.
 #
 # Prerequisites:
@@ -80,7 +80,7 @@ hyperfine --warmup 1 --runs "$RUNS" --export-json "$B/warm.json" \
   -n aube "$(cmd_for aube)" \
   -n aubenogvs "$(cmd_for aubenogvs)"
 
-echo "== scenario: noop (already installed) =="
+echo "== scenario: repeat install (already installed) =="
 hyperfine --warmup 1 --runs "$RUNS" --export-json "$B/noop.json" \
   -n pnpm11 "$(cmd_for pnpm11)" \
   -n pnpm12 "$(cmd_for pnpm12)" \
