@@ -1,11 +1,11 @@
 # Internal report: aube as the `vp install` engine
 
 Status: internal, pre-decision. Written 2026-08-06; POC appendix added 2026-08-07.
-Scope: evaluate the speed, feature, and stability claims of [aube](https://github.com/jdx/aube) and [nub](https://nubjs.com/), compare them with pnpm 11 and with the Rust pnpm (pnpm v12), and assess the risk of a default switch for `vp install`.
+Scope: evaluate the speed, feature, and stability claims of [aube](https://github.com/jdx/aube) and [nub](https://nubjs.com/). Compare them with pnpm 11 and with the Rust pnpm (pnpm v12). Assess the risk of a default switch for `vp install`.
 
-## Verdict, in four sentences
+## Verdict
 
-The aube speed claims reproduce on our hardware, but the win comes from a store-layout default (the global virtual store), not from Rust. With that layout normalized, aube is on par with pnpm 11, and the Rust pnpm 12 RC lands within 1.4x of aube. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers; one open bug breaks vite-plus itself under aube's default store. Ship aube only as an opt-in engine for now; the default switch needs the gate list at the end of this report.
+The aube speed claims reproduce on our hardware. The speed comes from the global virtual store, a store-layout default, not from Rust. With the same store layout on both sides, aube is on par with pnpm 11. The Rust pnpm 12 RC lands within 1.4x of aube. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers. One bug broke vite-plus itself under aube's default store. Fixes on both sides mitigate it now (section 4). Ship aube only as an opt-in engine for now. The default switch needs the gate list at the end of this report.
 
 ## 1. What the projects are
 
@@ -19,7 +19,7 @@ The aube speed claims reproduce on our hardware, but the win comes from a store-
 | Backing | en.dev (jdx, the mise author) | same circle | pnpm team (Zoltan Kochan) |
 | Issue tracker | disabled; a bot closes PRs daily | open (37 issues) | open |
 
-aube is the engine: resolver, linker, store, lockfile codecs, script runner. nub is one embedder; it wires aube behind a pnpm-flag-compatible CLI. The proposed vp model copies the nub model, so most nub findings transfer directly.
+aube is the engine: resolver, linker, store, lockfile codecs, script runner. nub is one embedder. nub wires aube behind a CLI that accepts pnpm's flags. The proposed vp model copies the nub model, so most nub findings apply to vp directly.
 
 pnpm v12 is the pnpm team's own Rust rewrite. Phase 1 moves fetch and link to Rust; TypeScript still owns resolution and the lockfile write. The RC shipped on 2026-08-05. Kochan states v12 keeps v11 behavior.
 
@@ -33,7 +33,14 @@ pnpm v12 is the pnpm team's own Rust rewrite. Phase 1 moves fetch and link to Ru
 
 ### Our measurements
 
-Setup: macOS arm64, Node 24.19.0, live npmmirror registry, aube's own ~1302-package benchmark fixture, one shared `pnpm-lock.yaml` (v9) for every tool, per-tool HOME and store isolation, hyperfine. This mirrors the aube methodology with one deliberate change: aube runs on the pnpm lockfile, which is the vp impersonation scenario. GVS = global virtual store.
+Setup:
+
+- macOS arm64, Node 24.19.0, live npmmirror registry, timed with hyperfine.
+- Fixture: aube's own benchmark manifest, ~1302 packages after resolution.
+- One shared `pnpm-lock.yaml` (v9) for every tool.
+- Per-tool isolation for HOME, store, and cache.
+
+This mirrors the aube methodology with one deliberate change: aube runs on the pnpm lockfile. That is the vp impersonation scenario. GVS = global virtual store.
 
 | Scenario | aube (GVS on, default) | pnpm 12 RC + GVS | pnpm 11 (default) | aube, GVS off | pnpm 12 RC (default) |
 | --- | --- | --- | --- | --- | --- |
@@ -41,15 +48,15 @@ Setup: macOS arm64, Node 24.19.0, live npmmirror registry, aube's own ~1302-pack
 | No-op `install` on installed tree | 290 ms | n/a | 200 ms | n/a | **10 ms** |
 | CLI startup (`--version`) | **6.7 ms** | n/a | 177 ms | n/a | n/a |
 
-Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x behind pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store architecture that wins warm installs buys nothing on first download.
+Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x slower than pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store layout that wins warm installs does not help the first download.
 
 ### What the numbers mean
 
-- The 7x warm claim reproduces: we measured 7.13x vs pnpm 11 at default settings. The claim is honest and their docs state the caveat themselves.
-- The cause is the store model, not the language. aube links `node_modules` out of a shared, pre-materialized virtual store. With GVS off, aube (3.08 s) is at pnpm 11 level (2.65 s). pnpm 12 with its own GVS enabled (529 ms) sits 1.4x behind aube.
-- CI does not get the headline number. aube forces per-project materialization when `CI=1`, so the CI-relevant comparison is the GVS-off column, where aube holds no lead over pnpm 11.
-- The GVS default also self-disables for projects that depend on `next`, `nuxt`, or `parcel` (module-resolution walk-up breaks through the shared store). Those projects get the slow column by design.
-- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. Plain no-op `aube install` (290 ms) is slower than pnpm 11 (200 ms), and the pnpm 12 RC wins this scenario outright at 10 ms.
+- The 7x warm claim reproduces: we measured 7.13x vs pnpm 11 at default settings. The claim is accurate. Their docs state the caveat themselves.
+- The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, aube (3.08 s) is at pnpm 11 level (2.65 s). pnpm 12 with its own GVS on (529 ms) is 1.4x slower than aube.
+- CI installs do not get the headline number. aube forces per-project mode when `CI=1`. The CI-relevant comparison is the GVS-off column, where aube holds no lead over pnpm 11.
+- The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the slow column by design.
+- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. A no-op `aube install` (290 ms) is slower than pnpm 11 (200 ms). The pnpm 12 RC wins this scenario outright at 10 ms.
 - The pnpm 12 RC default (non-GVS) warm result (9.7 s, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
 - Binary startup matters for `vp run`-style dispatch: aube starts 26x faster than pnpm's JS bootstrap. vp already pays this cost once per managed-pnpm invocation today.
 
@@ -60,60 +67,83 @@ Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnp
 - `pnpm-lock.yaml` v9 roundtrip: byte-identical after `aube install`, on a 2-package workspace and on the 1302-package fixture.
 - Workspace `catalog:` specifiers resolve correctly from `pnpm-workspace.yaml`.
 - `overrides` apply (forced `ms@2.1.2` appeared in the lockfile and on disk).
-- An existing `pnpm-workspace.yaml` is respected in place; aube created no stray files in the project.
-- Build-script gating follows the pnpm 11 `allowBuilds` model, with an extra optional jail (env, path, network permissions per package glob).
+- aube edits an existing `pnpm-workspace.yaml` in place. aube created no stray files in the project.
+- aube gates build scripts with the pnpm 11 `allowBuilds` model. It adds an optional jail with env, path, and network permissions per package glob.
 
 ### Verified broken or divergent (our tests)
 
 | Area | pnpm 11.20 behavior | aube 1.37 behavior | vp impact |
 | --- | --- | --- | --- |
-| `minimumReleaseAge` | Gates resolution; also rejects too-new lockfile entries under policy | `aube add` picked a 3-day-old nanoid under a 2-year window set in both `pnpm-workspace.yaml` and `.npmrc` | High. vp documents and tests this workflow; silent bypass is a security-story regression |
+| `minimumReleaseAge` | Gates resolution; also rejects too-new lockfile entries under policy | `aube add` picked a 3-day-old nanoid under a 2-year window set in both `pnpm-workspace.yaml` and `.npmrc` | High. vp documents and tests this workflow; a silent bypass weakens our security story |
 | Registry env vars | Reads `PNPM_CONFIG_REGISTRY`; ignores `npm_config_registry` / `NPM_CONFIG_REGISTRY` | Exact inverse: reads the npm spellings, ignores `PNPM_CONFIG_*` | Breaks our documented CI recipes when aube impersonates pnpm |
 | `add --lockfile-only` | Supported | Rejected with a usage error | Small, but disproves "every pnpm flag" parity |
 | Switch-back | n/a | After an aube install, `pnpm add` fails with `ERR_PNPM_HOIST_PATTERN_DIFF` until a full `pnpm install` recreates `node_modules` | "Run both side by side" is true for the lockfile, not for `node_modules` |
 | Old lockfiles | Reads v5-v8 | Refuses v5-v8 with an upgrade instruction | `vp migrate` must keep a pnpm fallback for old repos |
 
-aube has its own `minimumReleaseAge` implementation (24h default, `minimumReleaseAgeStrict`, `minimumReleaseAgeExclude`), so the vocabulary matches pnpm; the enforcement scope does not. We did not bisect whether the gap is add-time-only. The open nub issue #681 (dlx blocked by the same gate) shows the gate does fire elsewhere.
+aube has its own `minimumReleaseAge` implementation (24h default, `minimumReleaseAgeStrict`, `minimumReleaseAgeExclude`). The vocabulary matches pnpm; the enforcement scope does not. We did not isolate whether only `add` has the gap. The open nub issue [#681](https://github.com/nubjs/nub/issues/681) shows the gate fires for dlx.
 
 ### Claimed but not tested by us
 
-Patches, hooks, `yarn.lock` handling (aube docs say read-write, the nub site says Yarn is read-only), npm and bun lockfile fidelity at scale, Windows behavior, private registry auth. Budget these into any pilot.
+We did not test:
+
+- patches and hooks
+- `yarn.lock` handling (aube docs say read-write; the nub site says Yarn is read-only)
+- npm and bun lockfile fidelity at scale
+- Windows behavior
+- private registry auth
+
+Include these tests in any pilot.
 
 ## 4. Stability
 
-- Age: the engine is under 4 months old, at 37 minor releases. The pace is impressive and also means behavior moves week to week. v1.36 was needed for "pnpm 11.18 parity": aube chases pnpm's surface with a lag of days.
-- Governance: jdx/aube has issues disabled and a bot that auto-closes PRs. There is no public channel to report an engine bug against aube itself; the nub tracker absorbs them. For a vendor-critical dependency, vp would want a support agreement or at least a reopened tracker.
-- Known open bugs in the nub tracker that map to vp scenarios: vite-plus broken under GVS (#667, see below), a failed `optionalDependencies` build fails the whole install where npm/pnpm exit 0 (#660), false "already up to date" when the lockfile omits a declared dependency (#657), node shim self-exec hang (#656, the same bug class we fixed in vp #1820), env aliases for `cacheDir` ignored (#654).
-- Issue #667, "Can't use with vite+": `@voidzero-dev/vite-plus-core` requires `vite-plus/binding` but does not declare `vite-plus` as a dependency. Under aube/nub's global virtual store the realpath lives outside the project, Node's upward walk never finds `vite-plus`, and `vp build` crashes. pnpm's project-local virtual store masks the same undeclared dependency today. So the flagship speed feature breaks our own published packages, and the correct fix is on our side (declare the dependency or restructure the binding lookup), with `disableGlobalVirtualStoreForPackages` as the stopgap aube already ships for next/nuxt/parcel.
+- Age: the engine is under 4 months old, at 37 minor releases. That pace means behavior changes from week to week. aube needed v1.36 for "pnpm 11.18 parity". aube follows pnpm's surface with a lag of days.
+- Governance: jdx/aube has issues disabled and a bot that auto-closes PRs. There is no public channel for engine bugs against aube itself. Users report engine bugs in the nub tracker instead. For a vendor-critical dependency, vp needs a support agreement or a public tracker.
+- Open bugs in the nub tracker that map to vp scenarios:
+  - [#667](https://github.com/nubjs/nub/issues/667): vite-plus was broken under GVS; mitigated now (see below).
+  - [#660](https://github.com/nubjs/nub/issues/660): one failed `optionalDependencies` build fails the whole install; npm and pnpm exit 0.
+  - [#657](https://github.com/nubjs/nub/issues/657): a false "already up to date" result when the lockfile omits a declared dependency.
+  - [#656](https://github.com/nubjs/nub/issues/656): the node shim executes itself and hangs (the bug class we fixed in vp [#1820](https://github.com/voidzero-dev/vite-plus/pull/1820)).
+  - [#654](https://github.com/nubjs/nub/issues/654): the engine ignores env aliases for `cacheDir`.
+- Issue [#667](https://github.com/nubjs/nub/issues/667), "Can't use with vite+": `@voidzero-dev/vite-plus-core` requires `vite-plus/binding` but does not declare `vite-plus` as a dependency. Under aube/nub's global virtual store, the realpath lives outside the project. Node's upward walk never finds `vite-plus`, and `vp build` crashes. pnpm's project-local virtual store masks the same undeclared dependency today. So the flagship speed feature broke our own published packages. The correct fix is on our side: declare the dependency, or restructure the binding lookup.
+- Status update, 2026-08-07. Three changes mitigate #667, and we verified the result locally:
+  - vp [PR #2313](https://github.com/voidzero-dev/vite-plus/pull/2313) (shipped in vite-plus 0.2.8) resolves the bundled Rolldown bindings through platform packages. This removes the `vite-plus/binding` require from core.
+  - nub 0.7.2 detects undeclared imports and materializes those packages per-project. It flags vite-plus for its optional `playwright` and `webdriverio` imports, so vite-plus stays out of nub's global store.
+  - aube 1.37's store layout nests a package's closure inside one slot, so the old require also resolves there.
+  - We verified `vp build` passes under nub 0.7.2 with vite-plus 0.2.8, and under aube 1.37's global store with both 0.2.7 and 0.2.8. The issue stays open. vite-plus gets no GVS speed under nub until we declare or remove the optional imports.
 
 ## 5. The Rust pnpm alternative
 
-pnpm v12 hit RC yesterday. Our measurements confirm its direction: 10 ms no-op installs now, 529 ms warm installs with the global virtual store enabled, with pnpm's own lockfile semantics, policy engine, and config surface at zero compatibility risk. Its remaining gaps are the RC regressions and the phased rollout (resolution still in TypeScript). If the motive for aube is speed alone, pnpm 12 + `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer, and vp already manages pnpm versions.
+pnpm v12 reached RC on 2026-08-05. Our measurements confirm its direction: 10 ms no-op installs now, and 529 ms warm installs with the global virtual store on. It keeps pnpm's own lockfile semantics, policy engine, and config surface, so it carries no compatibility risk. Its open gaps are the RC regressions and the staged rollout (resolution stays in TypeScript for now). If the motive for aube is speed alone, pnpm 12 with `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer. vp already manages pnpm versions.
 
-What pnpm 12 does not give us: the 7 ms binary startup for script dispatch, the embeddable Rust crate (aube publishes `aube` on crates.io with a Host profile API that our NAPI binding or `vp_global_cli` could link directly), the lifecycle-script jail, or one engine across npm/pnpm/yarn/bun lockfiles.
+pnpm 12 does not give us:
+
+- the 7 ms binary startup for script dispatch
+- the embeddable Rust crate (aube ships on crates.io with a Host profile API; our NAPI binding or `vp_global_cli` can link it directly)
+- the lifecycle-script jail
+- one engine across npm, pnpm, yarn, and bun lockfiles
 
 ## 6. Risk assessment for `vp install` on aube by default
 
-1. Correctness risk, high today: #667 breaks vp's own toolchain under default settings; min-release-age enforcement diverges; optional-dep and staleness bugs are open.
-2. Compatibility risk, medium: lockfile fidelity looks excellent; the env-var and flag surfaces have verified gaps; Windows is unmeasured.
-3. Vendor risk, medium-high: single company, closed contribution model, no public engine tracker, 4 months of history. The MIT license and the crates.io publication cap the downside (we can fork or pin).
-4. Speed claim risk, low-medium: the numbers are real but scenario-shaped. Our CI-heavy users see the GVS-off column, where aube has no lead over pnpm 11 and loses to pnpm 12.
-5. Opportunity cost: pnpm 12 stable will close most of the speed gap for pnpm projects with zero migration risk, on a team with seven years of production history.
+1. Correctness risk, medium today. [nub #667](https://github.com/nubjs/nub/issues/667) broke vp's own toolchain under default settings; current engine and vite-plus versions mitigate it (section 4), and old pairs still crash. Min-release-age enforcement diverges. The optional-dep and staleness bugs are open.
+2. Compatibility risk, medium. Lockfile fidelity is excellent in our tests. The env-var and flag surfaces have verified gaps. We did not measure Windows.
+3. Vendor risk, medium-high. One company, a closed contribution model, no public engine tracker, 4 months of history. The MIT license and the crates.io publication cap the downside: we can fork or pin.
+4. Speed claim risk, low-medium. The numbers are real but scenario-shaped. Our CI-heavy users see the GVS-off column, where aube has no lead over pnpm 11 and loses to pnpm 12.
+5. Opportunity cost. pnpm 12 stable will close most of the speed gap for pnpm projects, with no migration risk, from a team with seven years of production history.
 
 ## 7. Recommended gates before any default switch
 
-1. Fix `@voidzero-dev/vite-plus-core` to declare its `vite-plus` binding dependency; verify vp under GVS end to end.
-2. Verified min-release-age parity: an aube release must enforce the configured window for add, install, and dlx; add PTY snapshot coverage on our side.
-3. Env contract: `vp install` must keep our documented `PNPM_CONFIG_*` behavior whatever engine runs underneath; decide whether vp translates the env or requires aube support.
+1. GVS eligibility for vite-plus. [PR #2313](https://github.com/voidzero-dev/vite-plus/pull/2313) fixed the core binding lookup. Declare or remove the remaining optional imports (`playwright`, `webdriverio`) so engine heuristics stop the exclusion of vite-plus. Verify vp under GVS end to end.
+2. Verified min-release-age parity: an aube release must enforce the configured window for add, install, and dlx. Add PTY snapshot coverage on our side.
+3. Env contract: `vp install` must keep our documented `PNPM_CONFIG_*` behavior with any engine underneath. Decide whether vp translates the env or requires aube support.
 4. A support channel with en.dev for engine bugs, or a reopened public tracker.
 5. Windows parity run of our full snapshot suite with the engine flag on.
 6. A benchmark rerun against pnpm 12 stable, on Linux CI hardware, before we cite any speed numbers publicly.
 
-Recommendation: introduce the engine behind an explicit opt-in (config key or `--engine` flag), pilot it in ecosystem-ci against the fork catalog, and hold the default flip until the six gates pass. Publish nothing about a default until gate 1 lands, because the first thing a reviewer will try is `vp build` on a template, which fails today under nub.
+Recommendation: introduce the engine behind an explicit opt-in (a config key or an `--engine` flag). Pilot it in ecosystem-ci against the fork catalog. Hold the default flip until the six gates pass. Publish nothing about a default until gate 1 lands. A reviewer's first test is `vp build` on a template. That passes with nub 0.7.2 and vite-plus 0.2.8, but only through engine fallback heuristics. Older engine or vite-plus versions still crash.
 
 ## Appendix A: vp POC measurements (2026-08-07)
 
-We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines; the change rides on this branch, see `crates/vp_pm_cli/src/dispatch.rs`). The six-arm rerun uses the same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-arm store isolation, and hyperfine with 5 runs. The pnpm arms run through vp's managed package-manager path; nub runs standalone because vp rejects `devEngines.packageManager: nub`.
+We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines). The change is on this branch in `crates/vp_pm_cli/src/dispatch.rs`. The five-arm rerun uses the same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-arm store isolation, and hyperfine with 5 runs. The pnpm arms run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
 
 | Arm | Warm install | No-op install |
 | --- | --- | --- |
@@ -125,15 +155,15 @@ We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (fou
 
 Readings:
 
-- The embed path works and keeps the lockfile byte-identical; the nub arm also roundtrips the lockfile untouched.
+- The embed path works and keeps the lockfile byte-identical. The nub arm also returns the lockfile untouched.
 - vp + aube wins warm installs, but the margin over pnpm 12 + GVS through the same vp dispatch is 1.45x, not 7x.
-- pnpm 12's native binary turns vp's no-op install into 20 ms, 15x faster than the aube embed path, which revalidates the shared store every run. nub hides that cost behind its own staleness check (114 ms), which vp could copy for either engine.
-- The pnpm 12 RC default (non-GVS) regression from section 2 reproduces through vp (11.3 s, syscall-heavy). Track it against the RC; it should not survive to stable.
+- pnpm 12's native binary turns vp's no-op install into 20 ms. That is 15x faster than the aube embed path, which revalidates the shared store on every run. nub hides that cost behind its own staleness check (114 ms). vp can copy that check for either engine.
+- The pnpm 12 RC default (non-GVS) regression from section 2 reproduces through vp (11.3 s, syscall-heavy). Retest it when pnpm 12 reaches stable.
 - vp accepts a `packageManager: pnpm@12.0.0-rc.0` pin today, so the pnpm 12 upgrade path needs no vp code change.
 
 ## Appendix B: sources and artifacts
 
 - Benchmark scripts: `rfcs/aube-install-engine-evaluation/standalone-matrix.sh` and `rfcs/aube-install-engine-evaluation/vp-poc-matrix.sh`; setup and recorded tool versions in the sibling `README.md`. Raw hyperfine JSON and the compat repro transcripts stayed local.
 - aube docs: benchmarks, pnpm-users, settings reference (GVS heuristics at `disableGlobalVirtualStoreForPackages`), embedding guide.
-- nub: nubjs.com claims pages, issue tracker (#667, #681, #660, #657, #656, #654).
+- nub: nubjs.com claims pages, issue tracker ([#667](https://github.com/nubjs/nub/issues/667), [#681](https://github.com/nubjs/nub/issues/681), [#660](https://github.com/nubjs/nub/issues/660), [#657](https://github.com/nubjs/nub/issues/657), [#656](https://github.com/nubjs/nub/issues/656), [#654](https://github.com/nubjs/nub/issues/654)).
 - pnpm v12: v12.0.0-rc.0 release notes, official rewrite announcements, morello.dev summary of the phase plan.

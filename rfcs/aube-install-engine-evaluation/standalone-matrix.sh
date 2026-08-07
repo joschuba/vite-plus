@@ -10,7 +10,7 @@
 #   - FIXTURE_DIR contains package.json and a v9 pnpm-lock.yaml.
 #     The report used aube's own fixture (~1302 packages):
 #     https://github.com/jdx/aube/blob/main/benchmarks/fixture.package.json
-#     with the lockfile generated once by `pnpm install --lockfile-only`.
+#     Generate the lockfile once with `pnpm install --lockfile-only`.
 #
 # Overridable environment:
 #   FIXTURE_DIR  (required)

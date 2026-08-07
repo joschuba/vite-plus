@@ -27,7 +27,7 @@ pub async fn dispatch(
     command: PackageManagerCommand,
 ) -> Result<ExitStatus, Error> {
     // POC (do not ship): route `vp install` through the embedded aube engine
-    // when VP_INSTALL_ENGINE=aube. Flags on the install command are ignored.
+    // when VP_INSTALL_ENGINE=aube. This path ignores install-command flags.
     if matches!(command, PackageManagerCommand::Install(_))
         && std::env::var_os("VP_INSTALL_ENGINE").is_some_and(|v| v == "aube")
     {

@@ -9,7 +9,7 @@
 #   - FIXTURE_DIR contains package.json and a v9 pnpm-lock.yaml
 #
 # The pnpm arms run through vp's managed package-manager path. The pnpm 12
-# arms pin `packageManager: pnpm@<PNPM12_VERSION>` in package.json; vp
+# arms pin `packageManager: pnpm@<PNPM12_VERSION>` in package.json, and vp
 # provisions that version itself. nub runs standalone because vp rejects
 # `devEngines.packageManager: nub`.
 #
@@ -40,7 +40,7 @@ stage() {
   cp "$FIXTURE_DIR/package.json" "$P/$t/package.json"
   cp "$FIXTURE_DIR/pnpm-lock.yaml" "$P/$t/pnpm-lock.yaml"
   printf 'registry=%s\n' "$REG" > "$P/$t/.npmrc"
-  # allowBuilds: pnpm 11 aborts on unreviewed build scripts; deny them in
+  # allowBuilds: pnpm 11 aborts on unreviewed build scripts. Deny them in
   # every arm so all engines skip builds the same way. Extend the list if
   # your fixture reports more packages.
   printf 'storeDir: %s/stores/%s/store\ncacheDir: %s/stores/%s/cache\nallowBuilds:\n  "@parcel/watcher": false\n' "$P" "$t" "$P" "$t" > "$P/$t/pnpm-workspace.yaml"
