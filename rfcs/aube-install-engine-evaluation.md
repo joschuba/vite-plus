@@ -33,7 +33,7 @@ pnpm v12 is the pnpm team's own Rust rewrite. Phase 1 moves fetch and link to Ru
 
 ### Our measurements
 
-Setup:
+Environment:
 
 - macOS arm64, Node 24.19.0, live npmmirror registry, timed with hyperfine.
 - Fixture: aube's own benchmark manifest, ~1302 packages after resolution.
@@ -42,9 +42,9 @@ Setup:
 
 This mirrors the aube methodology with one deliberate change: aube runs on the pnpm lockfile. That is the vp impersonation scenario. GVS = global virtual store.
 
-The primary comparison is the vp POC run of 2026-08-07: six arms, one hyperfine pass, vp v0.2.8 with the embed hook (appendix A). The pnpm arms run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
+The primary comparison is the vp POC run of 2026-08-07: six setups, one hyperfine pass, vp v0.2.8 with the embed hook (appendix A). The pnpm setups run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
 
-| Arm | Warm install, `node_modules` wiped | No-op `install` |
+| Setup | Warm install, `node_modules` wiped | No-op `install` |
 | --- | --- | --- |
 | vp + embedded aube 1.37 (GVS on) | **374 ms** | 303 ms |
 | aube 1.37 CLI (standalone, GVS on) | 390 ms | 282 ms |
@@ -151,11 +151,11 @@ Recommendation: introduce the engine behind an explicit opt-in (a config key or 
 
 ## Appendix A: the vp POC (2026-08-07)
 
-We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines). The change is on this branch in `crates/vp_pm_cli/src/dispatch.rs`. The six-arm comparison table in section 2, Our measurements, comes from this POC run: same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-arm store isolation, hyperfine with 5 runs.
+We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines). The change is on this branch in `crates/vp_pm_cli/src/dispatch.rs`. The six-setup comparison table in section 2, Our measurements, comes from this POC run: same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-setup store isolation, hyperfine with 5 runs.
 
 POC-specific readings:
 
-- The embed path works and keeps the lockfile byte-identical. The nub and standalone-aube arms also return the lockfile untouched.
+- The embed path works and keeps the lockfile byte-identical. The nub and standalone-aube setups also return the lockfile untouched.
 - Embedded aube (374 ms warm) matches the standalone aube CLI (390 ms) within run noise. The in-process embed adds no measurable cost and removes a process spawn.
 - pnpm 12's native binary answers vp's no-op install in 20 ms, 15x faster than the aube embed path, which revalidates the shared store on every run.
 - vp accepts a `packageManager: pnpm@12.0.0-rc.0` pin today, so the pnpm 12 upgrade path needs no vp code change.

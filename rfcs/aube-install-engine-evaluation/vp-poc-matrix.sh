@@ -8,8 +8,8 @@
 #   - a nub binary (release tarball from https://github.com/nubjs/nub/releases)
 #   - FIXTURE_DIR contains package.json and a v9 pnpm-lock.yaml
 #
-# The pnpm arms run through vp's managed package-manager path. The pnpm 12
-# arms pin `packageManager: pnpm@<PNPM12_VERSION>` in package.json, and vp
+# The pnpm setups run through vp's managed package-manager path. The pnpm 12
+# setups pin `packageManager: pnpm@<PNPM12_VERSION>` in package.json, and vp
 # provisions that version itself. nub runs standalone because vp rejects
 # `devEngines.packageManager: nub`.
 #
@@ -41,7 +41,7 @@ stage() {
   cp "$FIXTURE_DIR/pnpm-lock.yaml" "$P/$t/pnpm-lock.yaml"
   printf 'registry=%s\n' "$REG" > "$P/$t/.npmrc"
   # allowBuilds: pnpm 11 aborts on unreviewed build scripts. Deny them in
-  # every arm so all engines skip builds the same way. Extend the list if
+  # every setup so all engines skip builds the same way. Extend the list if
   # your fixture reports more packages.
   printf 'storeDir: %s/stores/%s/store\ncacheDir: %s/stores/%s/cache\nallowBuilds:\n  "@parcel/watcher": false\n' "$P" "$t" "$P" "$t" > "$P/$t/pnpm-workspace.yaml"
 }
@@ -63,7 +63,7 @@ echo "== prime =="
 (cd "$P/aube" && env $AUBE_ENV $VP install) > "$P/prime-aube.log" 2>&1 || { echo PRIME-AUBE-FAILED; tail -8 "$P/prime-aube.log"; exit 1; }
 (cd "$P/nub" && env $NUB_ENV $NUB install) > "$P/prime-nub.log" 2>&1 || { echo PRIME-NUB-FAILED; tail -8 "$P/prime-nub.log"; exit 1; }
 
-echo "== lockfile drift check (aube and nub arms) =="
+echo "== lockfile drift check (aube and nub setups) =="
 diff -q "$FIXTURE_DIR/pnpm-lock.yaml" "$P/aube/pnpm-lock.yaml" && echo aube-lock-identical || echo AUBE-LOCK-CHANGED
 diff -q "$FIXTURE_DIR/pnpm-lock.yaml" "$P/nub/pnpm-lock.yaml" && echo nub-lock-identical || echo NUB-LOCK-CHANGED
 

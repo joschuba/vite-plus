@@ -3,7 +3,7 @@
 # pnpm-lock.yaml (the vp impersonation scenario).
 #
 # Scenarios: warm (store kept, node_modules wiped), no-op, cold (all wiped).
-# Arms: pnpm11, pnpm12, pnpm12+global-virtual-store, aube, aube without GVS.
+# Setups: pnpm11, pnpm12, pnpm12+global-virtual-store, aube, aube without GVS.
 #
 # Prerequisites:
 #   - hyperfine on PATH
@@ -17,7 +17,7 @@
 #   BENCH_DIR    work area                  (default: mktemp -d)
 #   AUBE_BIN     aube binary                (default: aube on PATH)
 #   PNPM11_BIN   pnpm 11 binary             (default: pnpm on PATH)
-#   PNPM12_BIN   pnpm 12 binary             (required for the pnpm12 arms)
+#   PNPM12_BIN   pnpm 12 binary             (required for the pnpm12 setups)
 #   REGISTRY     npm registry               (default: https://registry.npmjs.org/)
 #   RUNS/COLD_RUNS                          (default: 5 / 3)
 set -euo pipefail

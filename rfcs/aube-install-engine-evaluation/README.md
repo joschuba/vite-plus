@@ -2,10 +2,10 @@
 
 These scripts produced the numbers in `../aube-install-engine-evaluation.md`.
 
-- `standalone-matrix.sh`: aube vs pnpm 11 vs pnpm 12 outside vp. Scenarios: warm, no-op, cold. All arms share one v9 `pnpm-lock.yaml`.
-- `vp-poc-matrix.sh`: the vp arms. Managed pnpm 11, managed pnpm 12 (default and with the global virtual store), the embedded-aube POC hook (`VP_INSTALL_ENGINE=aube`), and standalone nub.
+- `standalone-matrix.sh`: aube vs pnpm 11 vs pnpm 12 outside vp. Scenarios: warm, no-op, cold. All setups share one v9 `pnpm-lock.yaml`.
+- `vp-poc-matrix.sh`: the vp setups. Managed pnpm 11, managed pnpm 12 (default and with the global virtual store), the embedded-aube POC hook (`VP_INSTALL_ENGINE=aube`), and standalone nub.
 
-Both scripts read their inputs from environment variables and print the required ones when missing. Each run stages isolated homes, stores, and caches for each arm under a temp directory. The run does not touch your real pnpm or aube state.
+Both scripts read their inputs from environment variables and print the required ones when missing. Each run stages isolated homes, stores, and caches for each setup under a temp directory. The run does not touch your real pnpm or aube state.
 
 The recorded numbers came from this setup, on 2026-08-06 and 2026-08-07:
 
