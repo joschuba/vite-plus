@@ -149,6 +149,8 @@ wrong_self_convention = "allow"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+# POC: embedded install engine evaluation, see VP_INSTALL_ENGINE in vp_pm_cli.
+aube = { version = "1.37.0", default-features = false, features = ["rustls"] }
 append-only-vec = "0.1.7"
 arcstr = { version = "1.2.0", default-features = false }
 ariadne = { package = "rolldown-ariadne", version = "0.6.0" }

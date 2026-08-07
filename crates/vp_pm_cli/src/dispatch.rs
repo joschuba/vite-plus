@@ -26,6 +26,14 @@ pub async fn dispatch(
     cwd: &AbsolutePath,
     command: PackageManagerCommand,
 ) -> Result<ExitStatus, Error> {
+    // POC (do not ship): route `vp install` through the embedded aube engine
+    // when VP_INSTALL_ENGINE=aube. Flags on the install command are ignored.
+    if matches!(command, PackageManagerCommand::Install(_))
+        && std::env::var_os("VP_INSTALL_ENGINE").is_some_and(|v| v == "aube")
+    {
+        return dispatch_aube_install(cwd).await;
+    }
+
     let render_diagnostics = command.should_render_diagnostics();
     let command = match command {
         PackageManagerCommand::Dlx(args) => {
@@ -45,6 +53,49 @@ pub async fn dispatch(
 
     let resolution = command.resolve_for_manager(&manager)?;
     run_resolution(cwd, resolution, render_diagnostics).await
+}
+
+/// POC install path for the embedded aube engine. The host profile mirrors
+/// the nub model: impersonate pnpm, read and write the project's lockfile.
+async fn dispatch_aube_install(cwd: &AbsolutePath) -> Result<ExitStatus, Error> {
+    static HOST: aube::embed::Host = aube::embed::Host {
+        name: "vp",
+        display_name: "Vite+",
+        vendor: Some("VoidZero"),
+        version: env!("CARGO_PKG_VERSION"),
+        user_agent: concat!("vp/", env!("CARGO_PKG_VERSION")),
+        self_names: &["vp"],
+        compatible_names: &["pnpm"],
+        lockfile_basename: "vp-lock.yaml",
+        workspace_yaml: None,
+        manifest_namespace: "vp",
+        env_prefix: None,
+        config_env_prefix: None,
+        cache_namespace: "vp",
+        data_namespace: "vp",
+        canonical_lockfile_always_wins: false,
+        runtime_switching: false,
+        self_engines_check: false,
+        self_update_enabled: false,
+    };
+    aube::embed::initialize(&HOST, Vec::new());
+
+    let project_dir: &std::path::Path = cwd.as_ref();
+    let options = aube::embed::InstallOptions::new(project_dir.to_path_buf());
+    aube::embed::install(options)
+        .await
+        .map_err(|err| Error::UserMessage(format!("aube install failed: {err:#}").into()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(ExitStatus::from_raw(0))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        Ok(ExitStatus::from_raw(0))
+    }
 }
 
 async fn dispatch_dlx(
