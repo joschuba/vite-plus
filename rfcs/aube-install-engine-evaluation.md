@@ -5,7 +5,7 @@ Scope: evaluate the speed, feature, and stability claims of [aube](https://githu
 
 ## Verdict
 
-The aube speed claims reproduce on our hardware. The speed comes from the global virtual store, a store-layout default, not from Rust. With the same store layout on both sides, aube is on par with pnpm 11. The Rust pnpm 12 RC lands within 1.5x of aube through vp. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers. One bug broke vite-plus itself under aube's default store. Fixes on both sides mitigate it now (section 4). Ship aube only as an opt-in engine for now. The default switch needs the gate list at the end of this report.
+The aube speed claims reproduce on our hardware. The speed comes from the global virtual store, a store-layout default, not from Rust. With the same store layout on both sides, the gap nearly closes: pnpm 11 with its experimental global virtual store lands within 1.2x of aube through vp, and the pnpm 12 RC within 1.5x. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers. One bug broke vite-plus itself under aube's default store. Fixes on both sides mitigate it now (section 4). Ship aube only as an opt-in engine for now. The default switch needs the gate list at the end of this report.
 
 ## 1. What the projects are
 
@@ -54,6 +54,7 @@ The two scenarios:
 | --- | --- | --- |
 | aube 1.37 CLI (standalone, GVS on) | **361 ms** | 290 ms |
 | vp + embedded aube 1.37 (GVS on) | 374 ms | 289 ms |
+| vp + managed pnpm 11.20 + GVS | 439 ms | 193 ms |
 | nub 0.7.2 CLI (GVS on) | 528 ms | 132 ms |
 | vp + managed pnpm 12 RC + GVS | 579 ms | **20 ms** |
 | nub 0.7.2 CLI (GVS off) | 1.65 s | 24 ms |
@@ -68,7 +69,7 @@ Cold install (standalone CLIs; store, cache, and `node_modules` wiped; live netw
 ### What the numbers mean
 
 - The 7x warm claim reproduces: 7.13x engine-to-engine in the standalone matrix, and 7.1x through vp (2.66 s vs 374 ms). The claim is accurate. Their docs state the caveat themselves.
-- The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, vp + aube (3.02 s) trails vp + pnpm 11 (2.66 s). pnpm 12 with its own GVS on stays within 1.5x of aube through vp (579 ms vs 374 ms).
+- The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, vp + aube (3.02 s) trails vp + pnpm 11 (2.66 s). The store proves it from the other side too: pnpm 11 with `enableGlobalVirtualStore: true` (experimental, available today) lands at 439 ms through vp, within 1.2x of aube, with the JS bootstrap as the remaining gap. pnpm 12's GVS row (579 ms) is currently slower than pnpm 11's because the RC materializer is unfinished (see below).
 - CI installs do not get the headline number. aube forces per-project mode when `CI=1`. The CI-relevant comparison is the GVS-off row, where aube holds no lead over pnpm 11.
 - The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the GVS-off row by design.
 - aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. Repeat installs are aube's weak scenario: 268-290 ms in every aube setup, against 204 ms for vp + pnpm 11 and 20 ms for vp + pnpm 12.
@@ -84,7 +85,7 @@ pnpm 12 should not lose to pnpm 11, and at the mechanism level it does not: the 
 - The timing signature: the same warm install costs pnpm 11 about 8-11 s of kernel time; the pnpm 12 RC costs 141-152 s of kernel time across ~13 threads, inside 11 s of wall clock.
 - The disk signature: one warm install adds 81 MB of disk blocks under pnpm 11 but 296 MB under pnpm 12. Both produce per-file inodes (no hardlinks into the store), so pnpm 11's clone path shares blocks through APFS while the RC's Rust materializer writes about 4x the physical data for the same tree.
 
-Three facts say this is temporary. The v12 rollout is staged, and the team lists warm and frozen install optimization as post-v12 work. The RC release notes still land fixes in this exact path (directory-swap races in the shared-store materializer). And the paths pnpm's own headline numbers come from are fast in our table too: the 20 ms repeat install and the 579 ms GVS row. Judge pnpm 12 by those two rows; treat the 11.2 s row as a bug to retest at stable. We have not found an upstream issue that tracks the macOS regression; file one with these numbers.
+Three facts say this is temporary. The v12 rollout is staged, and the team lists warm and frozen install optimization as post-v12 work. The RC release notes still land fixes in this exact path (directory-swap races in the shared-store materializer). And the paths pnpm's own headline numbers come from are fast in our table too: the 20 ms repeat install and the 579 ms GVS row. Judge pnpm 12 by those two rows; treat the 11.2 s row as a bug to retest at stable. Upstream tracks the regression as [pnpm #11851](https://github.com/pnpm/pnpm/issues/11851) (syscall contention in the Rust materializer, macOS); our disk-block probe adds the copy-vs-clone evidence to that thread.
 
 ## 3. Features
 
@@ -139,7 +140,7 @@ Include these tests in any pilot.
 
 ## 5. The Rust pnpm alternative
 
-pnpm v12 reached RC on 2026-08-05. Our measurements confirm its direction: 20 ms repeat installs now, and 579 ms warm installs with the global virtual store on. It keeps pnpm's own lockfile semantics, policy engine, and config surface, so it carries no compatibility risk. Its open gaps are the RC regressions and the staged rollout (resolution stays in TypeScript for now). If the motive for aube is speed alone, pnpm 12 with `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer. vp already manages pnpm versions.
+pnpm v12 reached RC on 2026-08-05. Our measurements confirm its direction: 20 ms repeat installs now, and 579 ms warm installs with the global virtual store on. pnpm 11 already ships the same store behind `enableGlobalVirtualStore: true` (experimental) and measures 439 ms warm through vp today, so most of the warm-install win needs no version jump at all. It keeps pnpm's own lockfile semantics, policy engine, and config surface, so it carries no compatibility risk. Its open gaps are the RC regressions and the staged rollout (resolution stays in TypeScript for now). If the motive for aube is speed alone, pnpm 12 with `enableGlobalVirtualStore: true` delivers most of it without an impersonation layer. vp already manages pnpm versions.
 
 pnpm 12 does not give us:
 
