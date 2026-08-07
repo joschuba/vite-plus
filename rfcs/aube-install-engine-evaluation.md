@@ -5,7 +5,7 @@ Scope: evaluate the speed, feature, and stability claims of [aube](https://githu
 
 ## Verdict
 
-The aube speed claims reproduce on our hardware. The speed comes from the global virtual store, a store-layout default, not from Rust. With the same store layout on both sides, aube is on par with pnpm 11. The Rust pnpm 12 RC lands within 1.4x of aube. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers. One bug broke vite-plus itself under aube's default store. Fixes on both sides mitigate it now (section 4). Ship aube only as an opt-in engine for now. The default switch needs the gate list at the end of this report.
+The aube speed claims reproduce on our hardware. The speed comes from the global virtual store, a store-layout default, not from Rust. With the same store layout on both sides, aube is on par with pnpm 11. The Rust pnpm 12 RC lands within 1.6x of aube through vp. Feature compatibility with pnpm is strong at the lockfile layer and broken at the policy and environment layers. One bug broke vite-plus itself under aube's default store. Fixes on both sides mitigate it now (section 4). Ship aube only as an opt-in engine for now. The default switch needs the gate list at the end of this report.
 
 ## 1. What the projects are
 
@@ -42,25 +42,31 @@ Setup:
 
 This mirrors the aube methodology with one deliberate change: aube runs on the pnpm lockfile. That is the vp impersonation scenario. GVS = global virtual store.
 
-| Scenario | aube (GVS on, default) | pnpm 12 RC + GVS | pnpm 11 (default) | aube, GVS off | pnpm 12 RC (default) |
-| --- | --- | --- | --- | --- | --- |
-| Warm install, `node_modules` wiped | **371 ms** | 529 ms | 2.65 s | 3.08 s | 9.72 s |
-| No-op `install` on installed tree | 290 ms | **9.1 ms** | 200 ms | 270 ms | **10 ms** |
-| CLI startup (`--version`) | **6.7 ms** | same binary | 177 ms | same binary | ~0.7-0.9 s, high variance |
+The primary comparison is the vp POC run of 2026-08-07: six arms, one hyperfine pass, vp v0.2.8 with the embed hook (appendix A). The pnpm arms run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
 
-Startup notes. The GVS columns share the binary of their default columns, so startup cannot differ there. The pnpm 12 RC binary answers a no-op install in 10 ms but takes 0.7-0.9 s (sigma ~0.5 s) for `--version`: the Rust binary owns the install path and delegates other commands to the bundled JS CLI in this RC.
+| Arm | Warm install, `node_modules` wiped | No-op `install` |
+| --- | --- | --- |
+| vp + embedded aube 1.37 (GVS on) | **374 ms** | 303 ms |
+| aube 1.37 CLI (standalone, GVS on) | 390 ms | 282 ms |
+| nub 0.7.2 CLI (standalone) | 507 ms | 111 ms |
+| vp + managed pnpm 12 RC + GVS | 588 ms | **20 ms** |
+| vp + managed pnpm 11.20 | 3.41 s | 198 ms |
+| vp + managed pnpm 12 RC (default) | 10.6 s | 20 ms |
 
-Cold install (store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x slower than pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store layout that wins warm installs does not help the first download.
+Two engine-only data points come from the 2026-08-06 standalone matrix and support the analysis below: aube with GVS off lands at 3.08 s warm and 270 ms no-op, against standalone pnpm 11 at 2.65 s and 200 ms.
+
+Cold install (standalone CLIs, 2026-08-06 matrix; store, cache, and `node_modules` wiped; live network, 3 runs): pnpm 11 at 34.7 s, pnpm 12 RC at 45.0 s, aube at 50.9 s. aube is the slowest tool cold, 1.47x slower than pnpm 11. aube's own hermetic-registry table shows the same shape: cold aube (6.71 s) trails pnpm (6.65 s) and bun (1.45 s). The store layout that wins warm installs does not help the first download.
 
 ### What the numbers mean
 
-- The 7x warm claim reproduces: we measured 7.13x vs pnpm 11 at default settings. The claim is accurate. Their docs state the caveat themselves.
-- The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, aube (3.08 s) is at pnpm 11 level (2.65 s). pnpm 12 with its own GVS on (529 ms) is 1.4x slower than aube.
+- The 7x warm claim reproduces: 7.13x engine-to-engine in the standalone matrix, and 9.1x through vp (3.41 s vs 374 ms). The claim is accurate. Their docs state the caveat themselves.
+- The cause is the store model, not the language. aube links `node_modules` out of a shared virtual store that already holds the files. With GVS off, aube (3.08 s) is at pnpm 11 level (2.65 s). pnpm 12 with its own GVS on stays within 1.6x of aube through vp (588 ms vs 374 ms).
 - CI installs do not get the headline number. aube forces per-project mode when `CI=1`. The CI-relevant comparison is the GVS-off column, where aube holds no lead over pnpm 11.
 - The GVS default also turns itself off for projects that depend on `next`, `nuxt`, or `parcel`. Their module resolvers follow the store realpath out of the project and then cannot find project files. Those projects get the slow column by design.
-- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. A no-op `aube install` (290 ms) is slower than pnpm 11 (200 ms). The pnpm 12 RC wins this scenario outright at 10 ms.
-- The pnpm 12 RC default (non-GVS) warm result (9.7 s, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
-- Binary startup matters for `vp run`-style dispatch: aube starts 26x faster than pnpm 11's JS bootstrap. vp already pays this cost once per managed-pnpm invocation today. pnpm 12's native binary removes the cost on the install path, but its non-install commands still bootstrap the JS CLI in this RC.
+- aube's published 7 ms "already installed" number belongs to its `run`-path short circuit, not to `aube install`. No-op installs are aube's weak scenario: 303 ms through vp and 282 ms standalone, against 198 ms for vp + pnpm 11 and 20 ms for vp + pnpm 12.
+- The pnpm 12 RC default (non-GVS) warm result (10.6 s through vp, syscall-heavy) is an RC-quality regression on macOS. Retest it at stable.
+- CLI startup stays out of this comparison. vp dispatch wraps every engine, and the no-op row already captures the end-to-end floor per tool.
+- nub runs the same engine as aube but answers a no-op install in 111 ms, against aube's 282 ms. nub puts a staleness check in front of the engine and skips the store revalidation when the state file is fresh. vp can copy that check for either engine.
 
 ## 3. Features
 
@@ -143,24 +149,15 @@ pnpm 12 does not give us:
 
 Recommendation: introduce the engine behind an explicit opt-in (a config key or an `--engine` flag). Pilot it in ecosystem-ci against the fork catalog. Hold the default flip until the six gates pass. Publish nothing about a default until gate 1 lands. A reviewer's first test is `vp build` on a template. That passes with nub 0.7.2 and vite-plus 0.2.8, but only through engine fallback heuristics. Older engine or vite-plus versions still crash.
 
-## Appendix A: vp POC measurements (2026-08-07)
+## Appendix A: the vp POC (2026-08-07)
 
-We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines). The change is on this branch in `crates/vp_pm_cli/src/dispatch.rs`. The five-arm rerun uses the same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-arm store isolation, and hyperfine with 5 runs. The pnpm arms run through vp's managed package-manager path. nub runs standalone because vp rejects `devEngines.packageManager: nub`.
+We embedded the `aube` crate in `vp_pm_cli` behind `VP_INSTALL_ENGINE=aube` (four files, about 50 lines). The change is on this branch in `crates/vp_pm_cli/src/dispatch.rs`. The six-arm comparison table in section 2, Our measurements, comes from this POC run: same ~1302-package fixture, one shared `pnpm-lock.yaml`, per-arm store isolation, hyperfine with 5 runs.
 
-| Arm | Warm install | No-op install |
-| --- | --- | --- |
-| vp + embedded aube 1.37 (GVS on) | **409 ms** | 295 ms |
-| nub 0.7.2 standalone (aube engine) | 524 ms | 114 ms |
-| vp + managed pnpm 12.0.0-rc.0 + GVS | 591 ms | **20 ms** |
-| vp + managed pnpm 11.20 | 2.70 s | 198 ms |
-| vp + managed pnpm 12.0.0-rc.0 (default) | 11.27 s | 20 ms |
+POC-specific readings:
 
-Readings:
-
-- The embed path works and keeps the lockfile byte-identical. The nub arm also returns the lockfile untouched.
-- vp + aube wins warm installs, but the margin over pnpm 12 + GVS through the same vp dispatch is 1.45x, not 7x.
-- pnpm 12's native binary turns vp's no-op install into 20 ms. That is 15x faster than the aube embed path, which revalidates the shared store on every run. nub hides that cost behind its own staleness check (114 ms). vp can copy that check for either engine.
-- The pnpm 12 RC default (non-GVS) regression from section 2 reproduces through vp (11.3 s, syscall-heavy). Retest it when pnpm 12 reaches stable.
+- The embed path works and keeps the lockfile byte-identical. The nub and standalone-aube arms also return the lockfile untouched.
+- Embedded aube (374 ms warm) matches the standalone aube CLI (390 ms) within run noise. The in-process embed adds no measurable cost and removes a process spawn.
+- pnpm 12's native binary answers vp's no-op install in 20 ms, 15x faster than the aube embed path, which revalidates the shared store on every run.
 - vp accepts a `packageManager: pnpm@12.0.0-rc.0` pin today, so the pnpm 12 upgrade path needs no vp code change.
 
 ## Appendix B: sources and artifacts
