@@ -252,12 +252,8 @@ pub(super) async fn run_release_checks(
 
     for script in &readiness_report.workspace_scripts {
         raw_progress_line!("workspace script `", script, '`');
-        let status = run_scripts(
-            workspace_root_path,
-            package_manager,
-            std::slice::from_ref(script),
-        )
-        .await?;
+        let status =
+            run_scripts(workspace_root_path, package_manager, std::slice::from_ref(script)).await?;
         if !status.success() {
             return Ok(status);
         }
@@ -275,12 +271,9 @@ pub(super) async fn run_release_checks(
 
         for script in &readiness.scripts {
             raw_progress_line!(&plan.name, " script `", script, '`');
-            let status = run_scripts(
-                &plan.package_path,
-                package_manager,
-                std::slice::from_ref(script),
-            )
-            .await?;
+            let status =
+                run_scripts(&plan.package_path, package_manager, std::slice::from_ref(script))
+                    .await?;
             if !status.success() {
                 return Ok(status);
             }
@@ -500,6 +493,13 @@ async fn run_publish_preflight_inner(
     options: &ReleaseOptions,
     trusted_publish_context: &TrustedPublishContext,
 ) -> Result<ExitStatus, Error> {
+    let transport = oidc_publish_transport(package_manager, trusted_publish_context);
+    let npm_oidc = if transport == OidcPublishTransport::Native {
+        None
+    } else {
+        Some(npm_for_trusted_publishing().await?)
+    };
+
     for plan in release_plans {
         raw_progress_line!("checking ", &plan.name, '@', &plan.next_version);
 
@@ -511,7 +511,14 @@ async fn run_publish_preflight_inner(
             provenance: resolved_publish_provenance(plan, trusted_publish_context),
             ..Default::default()
         };
-        let status = run_publish_command(&plan.package_path, package_manager, &publish_options).await?;
+        let status = run_release_publish_command(
+            package_manager,
+            npm_oidc.as_ref(),
+            transport,
+            plan,
+            &publish_options,
+        )
+        .await?;
         if !status.success() {
             return Ok(status);
         }
@@ -528,6 +535,12 @@ async fn publish_packages_inner(
     trusted_publish_context: &TrustedPublishContext,
 ) -> Result<(usize, ExitStatus), Error> {
     let mut published_count = 0usize;
+    let transport = oidc_publish_transport(package_manager, trusted_publish_context);
+    let npm_oidc = if transport == OidcPublishTransport::Native {
+        None
+    } else {
+        Some(npm_for_trusted_publishing().await?)
+    };
 
     for plan in release_plans {
         let mut message = String::from("Publishing ");
@@ -544,7 +557,14 @@ async fn publish_packages_inner(
             provenance: resolved_publish_provenance(plan, trusted_publish_context),
             ..Default::default()
         };
-        let status = run_publish_command(&plan.package_path, package_manager, &publish_options).await?;
+        let status = run_release_publish_command(
+            package_manager,
+            npm_oidc.as_ref(),
+            transport,
+            plan,
+            &publish_options,
+        )
+        .await?;
         if !status.success() {
             return Ok((published_count, status));
         }
@@ -553,6 +573,100 @@ async fn publish_packages_inner(
     }
 
     Ok((published_count, ExitStatus::default()))
+}
+
+async fn run_release_publish_command(
+    package_manager: &PackageManager,
+    npm_oidc: Option<&PackageManager>,
+    transport: OidcPublishTransport,
+    plan: &PackageReleasePlan,
+    publish_options: &PublishRequest,
+) -> Result<ExitStatus, Error> {
+    match transport {
+        OidcPublishTransport::Native => {
+            return Ok(
+                run_publish_command(&plan.package_path, package_manager, publish_options).await?
+            );
+        }
+        OidcPublishTransport::ManagedNpm => {
+            let npm_oidc = npm_oidc.expect("managed npm transport requires npm");
+            return Ok(run_publish_command(&plan.package_path, npm_oidc, publish_options).await?);
+        }
+        OidcPublishTransport::PackThenManagedNpm => {}
+    }
+
+    let npm_oidc = npm_oidc.expect("pack bridge requires managed npm");
+    let temp_dir = tempfile::Builder::new().prefix("vp-oidc-publish-").tempdir()?;
+    let temp_path = AbsolutePathBuf::new(temp_dir.path().to_path_buf()).ok_or_else(|| {
+        Error::UserMessage("Temporary package directory was unexpectedly relative.".into())
+    })?;
+    let tarball_path = temp_path.join("package.tgz");
+    let pack_args =
+        pack_bridge_args(package_manager.package_manager_type(), &temp_path, &tarball_path);
+    let pack_status = run_managed_command(&plan.package_path, package_manager, &pack_args).await?;
+    if !pack_status.success() {
+        return Ok(pack_status);
+    }
+
+    let tarball_path = if package_manager.package_manager_type() == PackageManagerType::Pnpm {
+        find_single_pack_tarball(&temp_path)?
+    } else {
+        tarball_path
+    };
+    if !tarball_path.as_path().is_file() {
+        return Err(Error::UserMessage(
+            "The package manager reported a successful pack but did not create the expected package tarball."
+                .into(),
+        ));
+    }
+
+    let mut npm_publish = publish_options.clone();
+    npm_publish.target = Some(tarball_path.as_path().to_string_lossy().into_owned());
+    Ok(run_publish_command(&plan.package_path, npm_oidc, &npm_publish).await?)
+}
+
+pub(super) fn pack_bridge_args(
+    package_manager: PackageManagerType,
+    destination: &AbsolutePath,
+    tarball_path: &AbsolutePath,
+) -> Vec<String> {
+    let destination = destination.as_path().to_string_lossy().into_owned();
+    let tarball_path = tarball_path.as_path().to_string_lossy().into_owned();
+    match package_manager {
+        PackageManagerType::Pnpm => {
+            vec!["pack".into(), "--pack-destination".into(), destination]
+        }
+        PackageManagerType::Yarn => vec!["pack".into(), "--out".into(), tarball_path],
+        PackageManagerType::Bun => vec![
+            "pm".into(),
+            "pack".into(),
+            "--destination".into(),
+            destination,
+            "--filename".into(),
+            "package.tgz".into(),
+            "--quiet".into(),
+        ],
+        PackageManagerType::Npm => {
+            unreachable!("npm never requires a pack bridge")
+        }
+    }
+}
+
+fn find_single_pack_tarball(directory: &AbsolutePath) -> Result<AbsolutePathBuf, Error> {
+    let mut tarballs = fs::read_dir(directory.as_path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "tgz"));
+    let tarball = tarballs.next().ok_or_else(|| {
+        Error::UserMessage("Package manager did not create a .tgz artifact while packing.".into())
+    })?;
+    if tarballs.next().is_some() {
+        return Err(Error::UserMessage(
+            "Package manager created multiple .tgz artifacts for one package.".into(),
+        ));
+    }
+    AbsolutePathBuf::new(tarball)
+        .ok_or_else(|| Error::UserMessage("Packed tarball path was unexpectedly relative.".into()))
 }
 
 pub(super) fn apply_manifest_edits(

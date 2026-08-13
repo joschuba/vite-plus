@@ -204,6 +204,47 @@ pub enum Commands {
         #[arg(long, value_name = "OTP")]
         otp: Option<String>,
 
+        /// Configure npm Trusted Publishing for the selected workspace packages, then exit
+        #[arg(
+            long,
+            conflicts_with_all = [
+                "skip_publish",
+                "first_release",
+                "changelog",
+                "no_changelog",
+                "version",
+                "preid",
+                "otp",
+                "git_tag",
+                "no_git_tag",
+                "git_commit",
+                "no_git_commit",
+                "run_checks",
+                "no_run_checks"
+            ]
+        )]
+        setup_trusted_publishing: bool,
+
+        /// GitHub repository in owner/repository form (auto-detected from origin by default)
+        #[arg(long, value_name = "OWNER/REPOSITORY", requires = "setup_trusted_publishing")]
+        trusted_publisher_repository: Option<String>,
+
+        /// GitHub Actions workflow path or filename (auto-detected by default)
+        #[arg(long, value_name = "FILE", requires = "setup_trusted_publishing")]
+        trusted_publisher_workflow: Option<String>,
+
+        /// Restrict trusted publishing to a GitHub Actions environment
+        #[arg(long, value_name = "NAME", requires = "setup_trusted_publishing")]
+        trusted_publisher_environment: Option<String>,
+
+        /// Registry passed to npm trust (defaults to the configured npm registry)
+        #[arg(long, value_name = "URL", requires = "setup_trusted_publishing")]
+        trusted_publisher_registry: Option<String>,
+
+        /// Also permit npm's staged publishing flow for this trusted publisher
+        #[arg(long, requires = "setup_trusted_publishing")]
+        allow_stage_publish: bool,
+
         /// Release only matching workspace packages. When multiple values are provided,
         /// their order is used as a tie-breaker between independent packages.
         #[arg(long, value_name = "PATTERN", value_delimiter = ',')]
@@ -1143,6 +1184,12 @@ pub async fn run_command_with_options(
             version,
             preid,
             otp,
+            setup_trusted_publishing,
+            trusted_publisher_repository,
+            trusted_publisher_workflow,
+            trusted_publisher_environment,
+            trusted_publisher_registry,
+            allow_stage_publish,
             projects,
             git_tag: _,
             no_git_tag,
@@ -1152,7 +1199,22 @@ pub async fn run_command_with_options(
             no_run_checks,
             yes,
         } => {
-            let run_checks = if dry_run { run_checks } else { !no_run_checks || run_checks };
+            let run_checks = if setup_trusted_publishing {
+                false
+            } else if dry_run {
+                run_checks
+            } else {
+                !no_run_checks || run_checks
+            };
+            let trusted_publishing_setup = setup_trusted_publishing.then_some({
+                commands::release::TrustedPublishingSetupOptions {
+                    repository: trusted_publisher_repository,
+                    workflow: trusted_publisher_workflow,
+                    environment: trusted_publisher_environment,
+                    registry: trusted_publisher_registry,
+                    allow_stage_publish,
+                }
+            });
             commands::release::execute(
                 cwd,
                 commands::release::ReleaseOptions {
@@ -1169,6 +1231,7 @@ pub async fn run_command_with_options(
                     run_checks,
                     yes,
                 },
+                trusted_publishing_setup,
             )
             .await
         }

@@ -114,9 +114,9 @@ pub fn resolve_publish_command(
             args: command.args,
             env: command.env,
         }),
-        resolution::CommandResolution::Noop => Err(Error::UserMessage(
-            "publish unexpectedly resolved to a no-op".into(),
-        )),
+        resolution::CommandResolution::Noop => {
+            Err(Error::UserMessage("publish unexpectedly resolved to a no-op".into()))
+        }
         resolution::CommandResolution::InvalidArgument(message) => {
             Err(Error::UserMessage(message.into()))
         }
@@ -146,11 +146,32 @@ pub async fn run_scripts(
         "PATH".to_string(),
         vp_shared::format_path_prepended(manager.get_bin_prefix()),
     )]);
-    Ok(vp_command::run_command(
-        &manager.package_manager_type().to_string(),
-        args,
-        &env,
-        cwd,
-    )
-    .await?)
+    Ok(vp_command::run_command(&manager.package_manager_type().to_string(), args, &env, cwd)
+        .await?)
+}
+
+/// npm release line that first includes the registry-side `npm trust` configuration command.
+pub const TRUSTED_PUBLISHING_NPM_VERSION: &str = "^11.15.0";
+
+/// Downloads (or reuses) an npm version capable of configuring trusted publishers and returns a
+/// managed command handle for it.
+pub async fn npm_for_trusted_publishing() -> Result<PackageManager, Error> {
+    let (install_dir, _package_name, version) =
+        download_package_manager(PackageManagerType::Npm, TRUSTED_PUBLISHING_NPM_VERSION, None)
+            .await?;
+    Ok(PackageManager::from_install(PackageManagerType::Npm, version, install_dir))
+}
+
+/// Runs an arbitrary command through an already managed package-manager installation.
+pub async fn run_managed_command(
+    cwd: &vt_path::AbsolutePath,
+    manager: &PackageManager,
+    args: &[String],
+) -> Result<std::process::ExitStatus, Error> {
+    let env = std::collections::HashMap::from([(
+        "PATH".to_string(),
+        vp_shared::format_path_prepended(manager.get_bin_prefix()),
+    )]);
+    Ok(vp_command::run_command(&manager.package_manager_type().to_string(), args, &env, cwd)
+        .await?)
 }

@@ -484,14 +484,14 @@ mod tests {
     }
 
     #[test]
-    fn test_npm_silently_ignores_no_git_checks() {
+    fn test_npm_warns_and_ignores_no_git_checks() {
         let resolution =
             resolve(&npm("11.0.0"), PublishArgs { no_git_checks: true, ..Default::default() });
         let command = expect_run(resolution.outcome);
 
         assert_eq!(command.program, "npm");
         assert_eq!(command.args, vec!["publish"]);
-        assert!(resolution.diagnostics.is_empty());
+        assert_eq!(resolution.diagnostics[0].message, "npm does not support --no-git-checks.");
     }
 
     #[test]

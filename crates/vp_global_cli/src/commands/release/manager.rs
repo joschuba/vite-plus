@@ -45,17 +45,31 @@ struct PreparedRelease {
 struct ReleaseManager {
     cwd: AbsolutePathBuf,
     options: ReleaseOptions,
+    trusted_publishing_setup: Option<TrustedPublishingSetupOptions>,
     trusted_publish_context: TrustedPublishContext,
 }
 
 impl ReleaseManager {
     /// Constructs a manager and snapshots the current trusted-publishing environment.
-    fn new(cwd: AbsolutePathBuf, options: ReleaseOptions) -> Self {
-        Self { cwd, options, trusted_publish_context: TrustedPublishContext::detect() }
+    fn new(
+        cwd: AbsolutePathBuf,
+        options: ReleaseOptions,
+        trusted_publishing_setup: Option<TrustedPublishingSetupOptions>,
+    ) -> Self {
+        Self {
+            cwd,
+            options,
+            trusted_publishing_setup,
+            trusted_publish_context: TrustedPublishContext::detect(),
+        }
     }
 
     /// Executes the full release workflow, returning early when no packages need a release.
     async fn run(self) -> Result<ExitStatus, Error> {
+        if let Some(setup) = self.trusted_publishing_setup.as_ref() {
+            return execute_trusted_publishing_setup(&self.cwd, &self.options, setup).await;
+        }
+
         validate_release_options(&self.options)?;
         validate_trusted_publish_context(&self.options, &self.trusted_publish_context)?;
 
@@ -290,6 +304,7 @@ impl ReleaseManager {
             ensure_first_publish_workflow_template(
                 &release.workspace_root_path,
                 release.package_manager.package_manager_type(),
+                None,
                 &mut guidance,
             )?;
             print_first_publish_guidance(&guidance, &self.options);
@@ -679,6 +694,7 @@ fn tag_rollback_error(
 pub(super) async fn execute_release(
     cwd: AbsolutePathBuf,
     options: ReleaseOptions,
+    trusted_publishing_setup: Option<TrustedPublishingSetupOptions>,
 ) -> Result<ExitStatus, Error> {
-    ReleaseManager::new(cwd, options).run().await
+    ReleaseManager::new(cwd, options, trusted_publishing_setup).run().await
 }

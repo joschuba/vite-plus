@@ -381,14 +381,49 @@ pub(super) fn print_dry_run_actions(
     }
 
     for plan in release_plans {
-        let publish_options = resolve_publish_command(package_manager, &PublishRequest {
-            dry_run: true,
-            tag: resolved_publish_tag(plan, options).map(str::to_owned),
-            access: plan.access.clone(),
-            otp: options.otp.clone(),
-            provenance: resolved_publish_provenance(plan, trusted_publish_context),
-            ..Default::default()
-        })?;
+        let transport = oidc_publish_transport(package_manager, trusted_publish_context);
+        if transport != OidcPublishTransport::Native {
+            let mut line = String::from("Would publish ");
+            line.push_str(&plan.name);
+            line.push('@');
+            push_display(&mut line, &plan.next_version);
+            line.push_str(" with: ");
+            match transport {
+                OidcPublishTransport::ManagedNpm => {
+                    line.push_str("managed npm publish --dry-run");
+                }
+                OidcPublishTransport::PackThenManagedNpm => {
+                    push_display(&mut line, package_manager.package_manager_type());
+                    line.push_str(" pack, then managed npm publish <tarball> --dry-run");
+                }
+                OidcPublishTransport::Native => unreachable!(),
+            }
+            if let Some(tag) = resolved_publish_tag(plan, options) {
+                line.push_str(" --tag ");
+                line.push_str(tag);
+            }
+            if let Some(access) = plan.access.as_deref() {
+                line.push_str(" --access ");
+                line.push_str(access);
+            }
+            if resolved_publish_provenance(plan, trusted_publish_context) == Some(true) {
+                line.push_str(" --provenance");
+            }
+            output::note(&line);
+            continue;
+        }
+
+        let publish_options = resolve_publish_command(
+            package_manager,
+            &PublishRequest {
+                dry_run: true,
+                tag: resolved_publish_tag(plan, options).map(str::to_owned),
+                access: plan.access.clone(),
+                otp: options.otp.clone(),
+                provenance: resolved_publish_provenance(plan, trusted_publish_context),
+                ..Default::default()
+            },
+        )?;
         let mut line = String::from("Would publish ");
         line.push_str(&plan.name);
         line.push('@');
@@ -627,7 +662,7 @@ pub(super) fn collect_nonstandard_prerelease_channels(
         .collect()
 }
 
-fn prompt_for_confirmation(prompt: &str, default_yes: bool) -> Result<bool, Error> {
+pub(super) fn prompt_for_confirmation(prompt: &str, default_yes: bool) -> Result<bool, Error> {
     output::raw_inline(prompt);
     #[expect(clippy::disallowed_types)]
     let mut input = String::new();

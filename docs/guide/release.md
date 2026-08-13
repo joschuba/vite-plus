@@ -48,6 +48,57 @@ vp release --yes
 
 Use `--yes` in CI to skip the interactive confirmation prompt.
 
+## Configure Trusted Publishing
+
+Vite+ can configure the npm registry relationship for every selected workspace package. It
+detects the GitHub repository and publish workflow, provisions a compatible npm CLI, and invokes
+`npm trust` with an explicit package list:
+
+```bash
+# Validate without changing registry state
+vp release --setup-trusted-publishing --dry-run
+
+# Configure every public workspace package
+vp release --setup-trusted-publishing --yes
+```
+
+Use `--projects` to configure only part of the workspace. The repository, workflow, optional
+GitHub environment, and registry can be overridden with
+`--trusted-publisher-repository`, `--trusted-publisher-workflow`,
+`--trusted-publisher-environment`, and `--trusted-publisher-registry`. Add
+`--allow-stage-publish` when the same relationship should also authorize npm staged publishing.
+When binding an existing workflow to `--trusted-publisher-environment`, ensure its publish job uses
+the exact same GitHub Actions environment name; newly scaffolded workflows add this automatically.
+
+The package must already exist on the registry before npm can attach a trusted publisher. For a
+brand-new package name, perform the one-time bootstrap publish with interactive web/passkey
+authentication, then run the setup command. npm allows one trusted-publisher relationship per
+package and refuses to replace it implicitly. Inspect an existing relationship with
+`npm trust list <package>` and explicitly revoke it before changing providers or workflow claims.
+
+The generated GitHub Actions workflow grants `id-token: write` and does not require an npm publish
+token. Commit and push the workflow before running the first OIDC release.
+
+### Package-manager behavior
+
+Registry configuration always uses managed npm because `npm trust` is the only registry setup CLI.
+The release itself keeps native packaging semantics and chooses the safest available OIDC path:
+
+| Project manager                | Trusted publish path                     |
+| ------------------------------ | ---------------------------------------- |
+| npm 11.5.1+                    | native npm OIDC                          |
+| older npm                      | compatible managed npm                   |
+| pnpm 11.1.3+                   | native pnpm OIDC                         |
+| older pnpm                     | pnpm pack, then managed npm OIDC publish |
+| Yarn 4.10.3+ on GitHub Actions | native Yarn OIDC                         |
+| Yarn 4.11+ on GitLab CI        | native Yarn OIDC                         |
+| Yarn Classic                   | compatible managed npm                   |
+| older modern Yarn              | Yarn pack, then managed npm OIDC publish |
+| Bun                            | Bun pack, then managed npm OIDC publish  |
+
+The pack bridges publish an immutable temporary tarball, so pnpm, Yarn, and Bun still rewrite
+their workspace or catalog dependency protocols before npm performs authentication and upload.
+
 ## Common Flags
 
 ### Limit the release to specific packages
@@ -108,6 +159,7 @@ The first-release guidance explains:
 - required `repository` metadata
 - `publishConfig.access = "public"` for scoped public packages
 - the commands to run for dry-run and real publish
+- the one-time `--setup-trusted-publishing` command and new-package bootstrap constraint
 
 ## Git Tags
 

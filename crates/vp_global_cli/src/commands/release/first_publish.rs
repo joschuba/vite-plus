@@ -35,6 +35,7 @@ const PACKAGE_MANAGER_SETUP_TOKEN: &str = "      - __PACKAGE_MANAGER_SETUP__\n";
 const INSTALL_COMMAND_TOKEN: &str = "__INSTALL_COMMAND__";
 const RELEASE_COMMAND_TOKEN: &str = "__RELEASE_COMMAND__";
 const FIRST_RELEASE_COMMAND_TOKEN: &str = "__FIRST_RELEASE_COMMAND__";
+const PUBLISH_ENVIRONMENT_TOKEN: &str = "    # __PUBLISH_ENVIRONMENT__\n";
 const COREPACK_SETUP_STEP: &str = "      - name: Enable Corepack\n        run: corepack enable\n";
 const BUN_SETUP_STEP: &str = "      - name: Setup Bun\n        uses: oven-sh/setup-bun@v2\n";
 
@@ -176,8 +177,16 @@ macro_rules! first_publish_checklist {
                         "Workflow filename in npm",
                         render_inline_code(workflow_filename(&guidance.workflow_path)),
                     ),
+                    kv_owned!(
+                        "Validate setup",
+                        render_trusted_publishing_setup_command(options, true),
+                    ),
+                    kv_owned!(
+                        "Configure all selected packages",
+                        render_trusted_publishing_setup_command(options, false),
+                    ),
                     text!("npm requires the repository and workflow values to match exactly."),
-                    text!("Trusted publishing currently works for public npm packages and scopes."),
+                    text!("npm requires a package to exist before a trusted publisher can be attached. Bootstrap a brand-new package once with interactive web/passkey authentication, then run the setup command."),
                     text!("For any manual maintainer fallback, prefer npm passkeys/security-key 2FA instead of TOTP codes or long-lived publish tokens."),
                 ],
             ),
@@ -370,6 +379,7 @@ pub(super) fn collect_first_publish_guidance(
 pub(super) fn ensure_first_publish_workflow_template(
     cwd: &AbsolutePath,
     package_manager: PackageManagerType,
+    environment: Option<&str>,
     guidance: &mut FirstPublishGuidance,
 ) -> Result<(), Error> {
     if find_existing_release_workflow_path(cwd).is_some() {
@@ -384,7 +394,7 @@ pub(super) fn ensure_first_publish_workflow_template(
         Error::UserMessage(message.into())
     })?;
 
-    let rendered = render_publish_workflow_template(package_manager);
+    let rendered = render_publish_workflow_template(package_manager, environment);
     let workflow_file_path = cwd.join(workflow_path);
     fs::write(&workflow_file_path, rendered).map_err(|error| {
         let mut message = String::from("write ");
@@ -473,6 +483,26 @@ pub(super) fn render_release_command(
     command
 }
 
+/// Renders the one-time registry configuration command for the selected package set.
+pub(super) fn render_trusted_publishing_setup_command(
+    options: &ReleaseOptions,
+    dry_run: bool,
+) -> String {
+    let mut command = String::from("vp release --setup-trusted-publishing");
+    if let Some(projects) = options.projects.as_ref()
+        && !projects.is_empty()
+    {
+        command.push_str(" --projects ");
+        push_joined(&mut command, projects.iter().map(String::as_str), ",");
+    }
+    if dry_run {
+        command.push_str(" --dry-run");
+    } else {
+        command.push_str(" --yes");
+    }
+    command
+}
+
 /// Streams checklist lines to the output layer with a single reusable buffer.
 ///
 /// Building the full output eagerly would be simpler, but reusing one `String` keeps this path
@@ -526,14 +556,27 @@ fn join_string_slice(values: &[String], separator: &str) -> String {
     joined
 }
 
-fn render_publish_workflow_template(package_manager: PackageManagerType) -> String {
+fn render_publish_workflow_template(
+    package_manager: PackageManagerType,
+    environment: Option<&str>,
+) -> String {
     let package_manager_setup = package_manager_setup_step(package_manager);
     let install_command = package_manager_install_command(package_manager);
     let mut rendered = String::from(PUBLISH_WORKFLOW_TEMPLATE);
     rendered = rendered.replace(PACKAGE_MANAGER_SETUP_TOKEN, package_manager_setup);
     rendered = rendered.replace(INSTALL_COMMAND_TOKEN, install_command);
     rendered = rendered.replace(RELEASE_COMMAND_TOKEN, "vp release --yes");
-    rendered.replace(FIRST_RELEASE_COMMAND_TOKEN, "vp release --first-release --yes")
+    rendered = rendered.replace(FIRST_RELEASE_COMMAND_TOKEN, "vp release --first-release --yes");
+    let environment = environment.map_or_else(String::new, |environment| {
+        let encoded = serde_json::to_string(environment)
+            .expect("serializing a string as a JSON-compatible YAML scalar cannot fail");
+        let mut line = String::with_capacity(encoded.len() + 18);
+        line.push_str("    environment: ");
+        line.push_str(&encoded);
+        line.push('\n');
+        line
+    });
+    rendered.replace(PUBLISH_ENVIRONMENT_TOKEN, &environment)
 }
 
 fn package_manager_setup_step(package_manager: PackageManagerType) -> &'static str {
@@ -553,12 +596,12 @@ fn package_manager_install_command(package_manager: PackageManagerType) -> &'sta
     }
 }
 
-fn find_release_workflow_path(cwd: &AbsolutePath) -> String {
+pub(super) fn find_release_workflow_path(cwd: &AbsolutePath) -> String {
     find_existing_release_workflow_path(cwd)
         .unwrap_or_else(|| default_publish_workflow_path().to_owned())
 }
 
-fn find_existing_release_workflow_path(cwd: &AbsolutePath) -> Option<String> {
+pub(super) fn find_existing_release_workflow_path(cwd: &AbsolutePath) -> Option<String> {
     for candidate in [
         ".github/workflows/publish.yml",
         ".github/workflows/publish.yaml",
@@ -607,11 +650,11 @@ const fn default_publish_workflow_path() -> &'static str {
     DEFAULT_PUBLISH_WORKFLOW_PATH
 }
 
-fn workflow_filename(path: &str) -> &str {
+pub(super) fn workflow_filename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn detect_github_repo(cwd: &AbsolutePath) -> Option<String> {
+pub(super) fn detect_github_repo(cwd: &AbsolutePath) -> Option<String> {
     let remote = capture_git(cwd, ["config", "--get", "remote.origin.url"]).ok()?;
     parse_github_repo_slug(&remote)
 }
@@ -888,7 +931,7 @@ mod tests {
             ..Default::default()
         };
 
-        ensure_first_publish_workflow_template(&cwd, PackageManagerType::Pnpm, &mut guidance)
+        ensure_first_publish_workflow_template(&cwd, PackageManagerType::Pnpm, None, &mut guidance)
             .unwrap();
 
         let created = std::fs::read_to_string(cwd.join(".github/workflows/publish.yml")).unwrap();
@@ -911,6 +954,7 @@ mod tests {
         );
         assert!(!created.contains(PACKAGE_MANAGER_SETUP_TOKEN));
         assert!(!created.contains(INSTALL_COMMAND_TOKEN));
+        assert!(!created.contains(PUBLISH_ENVIRONMENT_TOKEN));
     }
 
     #[test]
@@ -925,7 +969,7 @@ mod tests {
             ..Default::default()
         };
 
-        ensure_first_publish_workflow_template(&cwd, PackageManagerType::Pnpm, &mut guidance)
+        ensure_first_publish_workflow_template(&cwd, PackageManagerType::Pnpm, None, &mut guidance)
             .unwrap();
 
         assert!(!guidance.workflow_template_created);
@@ -938,11 +982,20 @@ mod tests {
 
     #[test]
     fn workflow_template_creation_uses_bun_specific_setup() {
-        let rendered = render_publish_workflow_template(PackageManagerType::Bun);
+        let rendered = render_publish_workflow_template(PackageManagerType::Bun, None);
 
         assert!(rendered.contains("uses: oven-sh/setup-bun@v2"));
         assert!(rendered.contains("run: bun install --frozen-lockfile"));
         assert!(!rendered.contains("run: corepack enable"));
+    }
+
+    #[test]
+    fn workflow_template_binds_the_optional_environment() {
+        let rendered =
+            render_publish_workflow_template(PackageManagerType::Npm, Some("npm-release"));
+
+        assert!(rendered.contains("    environment: \"npm-release\"\n"));
+        assert!(!rendered.contains(PUBLISH_ENVIRONMENT_TOKEN));
     }
 
     fn make_release_options_for_tests() -> ReleaseOptions {

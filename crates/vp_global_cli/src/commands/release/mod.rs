@@ -19,7 +19,8 @@ use glob::Pattern;
 use petgraph::visit::EdgeRef;
 use vp_pm_cli::{
     PackageManager, PackageManagerType, PublishRequest, build_package_manager,
-    resolve_publish_command, run_publish_command, run_scripts,
+    get_package_manager_type_and_version, npm_for_trusted_publishing, resolve_publish_command,
+    run_managed_command, run_publish_command, run_scripts,
 };
 use vp_shared::{
     DependencyProtocolSummary, PackageJsonError, PackageManifest, Version, VersionBump,
@@ -82,6 +83,25 @@ pub struct ReleaseOptions {
     pub run_checks: bool,
     /// Skips the interactive confirmation prompt.
     pub yes: bool,
+}
+
+/// Inputs for configuring npm's registry-side trusted publisher relationship.
+///
+/// npm owns this configuration API even when pnpm, Yarn, or Bun owns the project lockfile. Vite+
+/// therefore provisions a compatible npm CLI for this one-time operation while preserving the
+/// project's native package manager for installs, scripts, packing, and supported OIDC publishes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrustedPublishingSetupOptions {
+    /// Explicit GitHub `owner/repository`; otherwise inferred from `remote.origin.url`.
+    pub repository: Option<String>,
+    /// Workflow path or filename; otherwise inferred from the repository.
+    pub workflow: Option<String>,
+    /// Optional protected GitHub Actions environment bound to the publisher.
+    pub environment: Option<String>,
+    /// Optional registry override passed directly to `npm trust`.
+    pub registry: Option<String>,
+    /// Also permit `npm stage publish` in addition to direct publish.
+    pub allow_stage_publish: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,6 +587,80 @@ fn resolved_publish_provenance(
     plan.publish_provenance.or_else(|| context.supports_publish_provenance().then_some(true))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OidcPublishTransport {
+    Native,
+    ManagedNpm,
+    PackThenManagedNpm,
+}
+
+/// Selects a publish transport that preserves each manager's manifest rewrite behavior without
+/// relying on OIDC support that predates the installed client.
+fn oidc_publish_transport(
+    package_manager: &PackageManager,
+    context: &TrustedPublishContext,
+) -> OidcPublishTransport {
+    if !context.supports_publish_provenance() {
+        return OidcPublishTransport::Native;
+    }
+
+    oidc_publish_transport_for(
+        package_manager.package_manager_type(),
+        package_manager.version(),
+        context.provider,
+    )
+}
+
+fn oidc_publish_transport_for(
+    package_manager: PackageManagerType,
+    version: &str,
+    provider: Option<TrustedPublishProvider>,
+) -> OidcPublishTransport {
+    match package_manager {
+        PackageManagerType::Npm => {
+            // npm 11.5.1 is the first release with native trusted-publisher OIDC exchange.
+            if version_at_least(version, 11, 5, 1) {
+                OidcPublishTransport::Native
+            } else {
+                OidcPublishTransport::ManagedNpm
+            }
+        }
+        PackageManagerType::Pnpm => {
+            // 11.1.3 also fixes the unresolved setup-node auth placeholder that could mask OIDC.
+            if version_at_least(version, 11, 1, 3) {
+                OidcPublishTransport::Native
+            } else {
+                OidcPublishTransport::PackThenManagedNpm
+            }
+        }
+        PackageManagerType::Yarn if !version_at_least(version, 2, 0, 0) => {
+            OidcPublishTransport::ManagedNpm
+        }
+        PackageManagerType::Yarn => {
+            // Provider support landed independently, so preserve its provider-specific floors.
+            let supports_provider = match provider {
+                Some(TrustedPublishProvider::GitLabCi) => version_at_least(version, 4, 11, 0),
+                Some(TrustedPublishProvider::GitHubActions) => version_at_least(version, 4, 10, 3),
+                Some(TrustedPublishProvider::CircleCi) => version_at_least(version, 4, 14, 0),
+                None => false,
+            };
+            if supports_provider {
+                OidcPublishTransport::Native
+            } else {
+                OidcPublishTransport::PackThenManagedNpm
+            }
+        }
+        PackageManagerType::Bun => OidcPublishTransport::PackThenManagedNpm,
+    }
+}
+
+fn version_at_least(version: &str, major: u64, minor: u64, patch: u64) -> bool {
+    Version::parse(version).is_ok_and(|version| {
+        version.prerelease().is_none()
+            && (version.major, version.minor, version.patch) >= (major, minor, patch)
+    })
+}
+
 mod first_publish;
 mod manager;
 mod planning;
@@ -575,12 +669,18 @@ mod reporting;
 mod storage;
 #[cfg(test)]
 mod tests;
+mod trusted_publishing;
 
 use self::{
-    first_publish::*, manager::execute_release, planning::*, protocols::*, reporting::*, storage::*,
+    first_publish::*, manager::execute_release, planning::*, protocols::*, reporting::*,
+    storage::*, trusted_publishing::execute_trusted_publishing_setup,
 };
 use super::prepend_js_runtime_to_path_env;
 
-pub async fn execute(cwd: AbsolutePathBuf, options: ReleaseOptions) -> Result<ExitStatus, Error> {
-    execute_release(cwd, options).await
+pub async fn execute(
+    cwd: AbsolutePathBuf,
+    options: ReleaseOptions,
+    trusted_publishing_setup: Option<TrustedPublishingSetupOptions>,
+) -> Result<ExitStatus, Error> {
+    execute_release(cwd, options, trusted_publishing_setup).await
 }

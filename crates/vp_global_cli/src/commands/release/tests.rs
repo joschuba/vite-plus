@@ -248,6 +248,21 @@ fn render_release_command_uses_yes_for_non_interactive_runs() {
 }
 
 #[test]
+fn render_trusted_publishing_setup_command_preserves_selection() {
+    let mut options = make_release_options();
+    options.projects = Some(vec!["@scope/pkg-a".into(), "@scope/pkg-b".into()]);
+
+    assert_eq!(
+        render_trusted_publishing_setup_command(&options, true),
+        "vp release --setup-trusted-publishing --projects @scope/pkg-a,@scope/pkg-b --dry-run"
+    );
+    assert_eq!(
+        render_trusted_publishing_setup_command(&options, false),
+        "vp release --setup-trusted-publishing --projects @scope/pkg-a,@scope/pkg-b --yes"
+    );
+}
+
+#[test]
 fn validate_release_options_rejects_real_skip_publish() {
     let error = validate_release_options(&ReleaseOptions {
         dry_run: false,
@@ -1257,4 +1272,83 @@ fn cycle_breaker_uses_package_name_when_selection_order_matches() {
     let names: Vec<&str> = ordered.iter().map(|package| package.name.as_str()).collect();
 
     assert_eq!(names, vec!["pkg-a", "pkg-b"]);
+}
+
+#[test]
+fn oidc_publish_transport_respects_client_support_boundaries() {
+    let github = github_hosted_trusted_publish_context();
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Npm, "11.5.1"), &github),
+        OidcPublishTransport::Native
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Npm, "11.4.2"), &github),
+        OidcPublishTransport::ManagedNpm
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Pnpm, "11.1.3"), &github),
+        OidcPublishTransport::Native
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Pnpm, "11.1.2"), &github),
+        OidcPublishTransport::PackThenManagedNpm
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Yarn, "1.22.22"), &github),
+        OidcPublishTransport::ManagedNpm
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Yarn, "4.10.2"), &github),
+        OidcPublishTransport::PackThenManagedNpm
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Yarn, "4.10.3"), &github),
+        OidcPublishTransport::Native
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Bun, "1.3.14"), &github),
+        OidcPublishTransport::PackThenManagedNpm
+    );
+}
+
+#[test]
+fn yarn_gitlab_oidc_requires_the_gitlab_fix_release() {
+    let gitlab = gitlab_trusted_publish_context();
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Yarn, "4.10.3"), &gitlab),
+        OidcPublishTransport::PackThenManagedNpm
+    );
+    assert_eq!(
+        oidc_publish_transport(&test_package_manager(PackageManagerType::Yarn, "4.11.0"), &gitlab),
+        OidcPublishTransport::Native
+    );
+}
+
+#[test]
+fn pack_bridge_uses_each_clients_deterministic_output_flags() {
+    let destination = test_absolute_path("/oidc-pack");
+    let tarball = destination.join("package.tgz");
+    let destination_text = destination.as_path().to_string_lossy().into_owned();
+    let tarball_text = tarball.as_path().to_string_lossy().into_owned();
+
+    assert_eq!(
+        pack_bridge_args(PackageManagerType::Pnpm, &destination, &tarball),
+        ["pack", "--pack-destination", destination_text.as_str()]
+    );
+    assert_eq!(
+        pack_bridge_args(PackageManagerType::Yarn, &destination, &tarball),
+        ["pack", "--out", tarball_text.as_str()]
+    );
+    assert_eq!(
+        pack_bridge_args(PackageManagerType::Bun, &destination, &tarball),
+        [
+            "pm",
+            "pack",
+            "--destination",
+            destination_text.as_str(),
+            "--filename",
+            "package.tgz",
+            "--quiet",
+        ]
+    );
 }

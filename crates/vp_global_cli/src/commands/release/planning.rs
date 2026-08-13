@@ -159,8 +159,7 @@ pub(super) fn load_workspace_packages(
 
         let manifest_path = package.absolute_path.join("package.json");
         let document = read_package_manifest(&manifest_path)?;
-        let vp_shared::PackageManifestDocument { contents: manifest_contents, manifest } =
-            document;
+        let vp_shared::PackageManifestDocument { contents: manifest_contents, manifest } = document;
         if manifest.private {
             continue;
         }

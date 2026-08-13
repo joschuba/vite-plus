@@ -178,6 +178,23 @@ The first publish needs extra operator guidance:
 - matching `repository` metadata
 - `publishConfig.access = "public"` for public scoped packages
 - recommended `vp release --first-release --dry-run` and CI commands
+- registry configuration through `vp release --setup-trusted-publishing`
+
+`npm trust` requires an existing registry package. Brand-new names therefore need one explicit
+interactive bootstrap publish before the trusted-publisher relationship can be attached. After
+that bootstrap, Vite+ configures all selected packages in one rate-limited pass and future
+publishes run without long-lived credentials.
+
+## Trusted-publishing client policy
+
+npm owns registry-side configuration, so Vite+ provisions npm 11.15+ for `npm trust` regardless of
+the workspace package manager. Publishing remains native where the client has complete OIDC
+support: npm 11.5.1+, pnpm 11.1.3+, Yarn 4.10.3+ on GitHub Actions, and Yarn 4.11+ on GitLab CI.
+
+Older pnpm or modern Yarn versions retain their manifest-rewrite semantics by packing first and
+publishing the resulting tarball through managed npm. Yarn Classic publishes directly through
+managed npm. Bun currently documents token authentication but not npm trusted-publisher OIDC, so
+its release path also packs with Bun and publishes the immutable tarball through managed npm.
 
 The workflow template should be a starting point, not a hidden side effect of a dry-run.
 
