@@ -172,27 +172,15 @@ The background check runs on **all** commands except:
 
 This keeps the check broadly useful without interfering with special commands.
 
-### Integration with Tips System
-
-The upgrade notice is **not** a tip — it is higher priority and displayed independently. When both an upgrade notice and a tip would be shown, both are displayed (notice first, then tip). The tip system's rate limiting and the upgrade check's rate limiting are independent.
-
-```
-...command output...
-
-vp update available: 0.1.0 → 0.2.0, run `vp upgrade`
-
-tip: short aliases available: i (install), rm (remove), un (uninstall), up (update), ls (list), ln (link)
-```
-
 ### File Structure
 
 ```
-crates/vite_global_cli/src/
+crates/vp_global_cli/src/
 ├── upgrade_check.rs        # New: cache read/write, background check, display
 ├── main.rs                # Modified: spawn check, display result after command
 ```
 
-No new crate — this is a small, focused module in the existing `vite_global_cli` crate. It imports `resolve_version` from the existing `commands/upgrade/registry.rs`.
+No new crate — this is a small, focused module in the existing `vp_global_cli` crate. It imports `resolve_version` from the existing `commands/upgrade/registry.rs`.
 
 ### Implementation Details
 
@@ -303,6 +291,5 @@ VP_NO_UPDATE_CHECK=1 vp build
 ## References
 
 - [RFC: Self-Update Command](./upgrade-command.md)
-- [RFC: CLI Tips](./cli-tips.md)
 - [npm update-notifier pattern](https://github.com/yeoman/update-notifier)
 - [Rust CLI update check (cargo-update)](https://github.com/nabijaczleweli/cargo-update)

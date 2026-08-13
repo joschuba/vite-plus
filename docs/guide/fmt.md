@@ -20,17 +20,17 @@ vp fmt . --write
 
 Put formatting configuration directly in the `fmt` block in `vite.config.ts` so all your configuration stays in one place. We do not recommend using `.oxfmtrc.json` with Vite+.
 
-For editors, point the formatter config path at `./vite.config.ts` so format-on-save uses the same `fmt` block:
+For editors, disable nested formatter configs so format-on-save uses the root Vite+ `fmt` block:
 
-```json
+```json [.vscode/settings.json]
 {
-  "oxc.fmt.configPath": "./vite.config.ts"
+  "oxc.fmt.disableNestedConfig": true
 }
 ```
 
 For the upstream formatter behavior and configuration reference, see the [Oxfmt docs](https://oxc.rs/docs/guide/usage/formatter.html).
 
-```ts
+```ts [vite.config.ts]
 import { defineConfig } from 'vite-plus';
 
 export default defineConfig({

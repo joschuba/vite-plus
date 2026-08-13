@@ -8,6 +8,7 @@ import { vi } from 'vitest';
 import { applyToolInitConfigToViteConfig, inspectInitCommand } from '../init-config.js';
 
 const tempDirs: string[] = [];
+const originalVpCliBin = process.env.VP_CLI_BIN;
 
 function createTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vp-init-config-'));
@@ -24,6 +25,11 @@ function createTempDir() {
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+  if (originalVpCliBin === undefined) {
+    delete process.env.VP_CLI_BIN;
+  } else {
+    process.env.VP_CLI_BIN = originalVpCliBin;
   }
   vi.clearAllMocks();
 });
@@ -60,9 +66,52 @@ describe('applyToolInitConfigToViteConfig', () => {
     const content = fs.readFileSync(viteConfigPath, 'utf8');
     expect(content).toContain('import { defineConfig } from');
     expect(content).toContain('vite-plus');
+    expect(content).toContain('jsPlugins');
+    expect(content).toContain('vite-plus/oxlint-plugin');
+    expect(content).toContain('prefer-vite-plus-imports');
     expect(content).toContain('typeAware');
     expect(content).toContain('typeCheck');
     expect(fs.existsSync(path.join(projectPath, '.oxlintrc.json'))).toBe(false);
+  });
+
+  it('auto-fixes tsconfig baseUrl before writing type-aware lint defaults', async () => {
+    const projectPath = createTempDir();
+    const fixerPath = path.join(projectPath, 'fix-baseurl.mjs');
+    fs.writeFileSync(
+      fixerPath,
+      `#!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+
+const tsconfigPath = path.join(process.cwd(), 'tsconfig.json');
+const text = fs.readFileSync(tsconfigPath, 'utf8');
+fs.writeFileSync(tsconfigPath, text.replace(/\\n\\s*"baseUrl": "\\.",?/, ''));
+`,
+    );
+    fs.chmodSync(fixerPath, 0o755);
+    process.env.VP_CLI_BIN = fixerPath;
+    fs.writeFileSync(
+      path.join(projectPath, 'tsconfig.json'),
+      `{
+  "compilerOptions": {
+    // comments require JSONC parsing
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
+  }
+}
+`,
+    );
+
+    const result = await applyToolInitConfigToViteConfig('lint', ['--init'], projectPath);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('added');
+
+    const viteConfig = fs.readFileSync(path.join(projectPath, 'vite.config.ts'), 'utf8');
+    expect(viteConfig).toContain('typeAware');
+    expect(viteConfig).toContain('typeCheck');
+    const tsconfig = fs.readFileSync(path.join(projectPath, 'tsconfig.json'), 'utf8');
+    expect(tsconfig).not.toContain('"baseUrl"');
   });
 
   it('ignores generated lint init defaults and still writes lint with options', async () => {
@@ -119,6 +168,8 @@ describe('applyToolInitConfigToViteConfig', () => {
     expect(result.action).toBe('added');
 
     const content = fs.readFileSync(path.join(projectPath, 'vite.config.ts'), 'utf8');
+    expect(content).toContain('vite-plus/oxlint-plugin');
+    expect(content).toContain('prefer-vite-plus-imports');
     expect(content).toContain('typeAware');
     expect(content).toContain('typeCheck');
     expect(content).not.toContain('jsx-a11y');
@@ -148,6 +199,20 @@ export default defineConfig({
     expect(result.action).toBe('added');
 
     const content = fs.readFileSync(viteConfigPath, 'utf8');
+    expect(content).toContain('fmt:');
+    expect(content).toContain('semi');
+    expect(fs.existsSync(path.join(projectPath, '.oxfmtrc.json'))).toBe(false);
+  });
+
+  it('treats format as a fmt init alias when merging generated config', async () => {
+    const projectPath = createTempDir();
+    fs.writeFileSync(path.join(projectPath, '.oxfmtrc.json'), '{\n  "semi": true\n}\n');
+
+    const result = await applyToolInitConfigToViteConfig('format', ['--init'], projectPath);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('added');
+
+    const content = fs.readFileSync(path.join(projectPath, 'vite.config.ts'), 'utf8');
     expect(content).toContain('fmt:');
     expect(content).toContain('semi');
     expect(fs.existsSync(path.join(projectPath, '.oxfmtrc.json'))).toBe(false);

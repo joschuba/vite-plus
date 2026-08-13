@@ -16,22 +16,33 @@ _clean_dist:
 _clean_dist:
   Remove-Item -Path 'packages/*/dist' -Recurse -Force -ErrorAction SilentlyContinue
 
-init: _clean_dist
+init: _clean_dist _fix_symlinks
   cargo binstall watchexec-cli cargo-insta typos-cli cargo-shear dprint taplo-cli -y
   node packages/tools/src/index.ts sync-remote
   pnpm install
   pnpm -C docs install
 
+[unix]
+_fix_symlinks:
+  #!/usr/bin/env bash
+  if [ "$(git config --get core.symlinks)" != "true" ]; then \
+    echo "Enabling core.symlinks and re-checking out symlinks..."; \
+    git config core.symlinks true; \
+    git ls-files -s | grep '^120000' | cut -f2 | while read -r f; do git checkout -- "$f"; done; \
+  fi
+
+[windows]
+_fix_symlinks:
+  $symlinks = git config --get core.symlinks; \
+  if ($symlinks -ne 'true') { \
+    Write-Host 'Enabling core.symlinks and re-checking out symlinks...'; \
+    git config core.symlinks true; \
+    git ls-files -s | Where-Object { $_ -match '^120000' } | ForEach-Object { ($_ -split "`t", 2)[1] } | ForEach-Object { git checkout -- $_ }; \
+  }
+
 build:
   pnpm install
-  pnpm --filter @rolldown/pluginutils build
-  pnpm --filter rolldown build-binding:release
-  pnpm --filter rolldown build-node
-  pnpm --filter vite build-types
-  pnpm --filter=@voidzero-dev/vite-plus-core build
-  pnpm --filter=@voidzero-dev/vite-plus-test build
-  pnpm --filter=@voidzero-dev/vite-plus-prompts build
-  pnpm --filter=vite-plus build
+  pnpm build
 
 ready:
   git diff --exit-code --quiet
@@ -56,11 +67,60 @@ check:
 watch-check:
   just watch "'cargo check; cargo clippy'"
 
+# Test all crates/* packages (new crates are automatically included) plus
+# vite-plus-cli (lives outside crates/) to catch type sync issues.
+# vp_cli_snapshots is excluded: its suite needs a built global binary and
+# node, and runs via `just snapshot-test` instead.
+# Single source of truth for cargo test, used by CI too.
+[unix]
 test:
-  cargo test
+  RUST_MIN_STACK=8388608 cargo test $(for d in crates/*/; do n=$(basename $d); [ "$n" = "vp_cli_snapshots" ] || echo -n "-p $n "; done) -p vite-plus-cli
 
+[windows]
+test:
+  $packages = Get-ChildItem -Path crates -Directory | Where-Object { $_.Name -ne 'vp_cli_snapshots' } | ForEach-Object { '-p'; $_.Name }; $Env:RUST_MIN_STACK='8388608'; $Env:__COMPAT_LAYER='RunAsInvoker'; cargo test @packages -p vite-plus-cli
+
+# PTY-based CLI snapshot tests (crates/vp_cli_snapshots). Builds the global
+# binary and shim template first so the runner never tests a stale build, and
+# installs Playwright Chromium for the browser-mode cases (idempotent).
+# Filter by trial name substring: `just snapshot-test create`. Accept snapshot changes with
+# `UPDATE_SNAPSHOTS=1 just snapshot-test`. Local-flavor cases additionally
+# need a built packages/cli (`pnpm build`); the runner fails fast when dist
+# is missing or stale. Use snapshot-test-global on checkouts without one.
+snapshot-test *args='': _install_chromium
+  cargo build -p vp_global_cli -p vp_trampoline
+  cargo test -p vp_cli_snapshots -- {{args}}
+
+# Browser-mode snapshot cases run with PLAYWRIGHT_BROWSERS_PATH=0, so the
+# browser must be installed into node_modules with the same setting.
+[unix]
+_install_chromium:
+  PLAYWRIGHT_BROWSERS_PATH=0 pnpm exec playwright install chromium
+
+[windows]
+_install_chromium:
+  $Env:PLAYWRIGHT_BROWSERS_PATH='0'; pnpm exec playwright install chromium
+
+# Global flavor + vpt cases only: needs no JS build, for Rust-side work on
+# a checkout that never ran `pnpm build`.
+[unix]
+snapshot-test-global *args='':
+  VP_SNAP_SKIP_FLAVORS=local just snapshot-test {{args}}
+
+[windows]
+snapshot-test-global *args='':
+  $Env:VP_SNAP_SKIP_FLAVORS='local'; just snapshot-test {{args}}
+
+# Single source of truth for clippy, used by CI too. The `-A` flags allow
+# new toolchain lints that fire in upstream rolldown crates without a `[lints]` table.
 lint:
-  cargo clippy --workspace --all-targets --all-features -- --deny warnings
+  cargo clippy --workspace --all-targets --all-features -- --deny warnings \
+    -A clippy::byte_char_slices \
+    -A clippy::manual_assert_eq \
+    -A clippy::needless_return_with_question_mark \
+    -A clippy::redundant_else \
+    -A clippy::unused_async_trait_impl \
+    -A clippy::useless_borrows_in_formatting
 
 [unix]
 doc:

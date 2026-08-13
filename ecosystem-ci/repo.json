@@ -2,8 +2,8 @@
   "dify": {
     "repository": "https://github.com/langgenius/dify.git",
     "branch": "main",
-    "hash": "356a156f365a3c762f29303176defb28cbed3710",
-    "directory": "web"
+    "hash": "baf2191ee360c5f058a9e25c2c2c26cafea2bbe6",
+    "forceFreshMigration": true
   },
   "skeleton": {
     "repository": "https://github.com/skeletonlabs/skeleton.git",
@@ -13,8 +13,9 @@
   "vibe-dashboard": {
     "repository": "https://github.com/voidzero-dev/vibe-dashboard.git",
     "branch": "main",
-    "hash": "158e4a0c3d8a1801e330300a5deba4506fd5dfb9",
-    "forceFreshMigration": true
+    "hash": "92a143a57478723987e778439a355291835135ec",
+    "forceFreshMigration": true,
+    "playwright": true
   },
   "rollipop": {
     "repository": "https://github.com/leegeunhyeok/rollipop.git",
@@ -29,7 +30,7 @@
   "vue-mini": {
     "repository": "https://github.com/vue-mini/vue-mini.git",
     "branch": "master",
-    "hash": "23df6ba49e29d3ea909ef55874f59b973916d177"
+    "hash": "333c5957bf99a68991c9f91019670c56b65bd896"
   },
   "vite-plugin-react": {
     "repository": "https://github.com/vitejs/vite-plugin-react.git",
@@ -37,14 +38,16 @@
     "hash": "0d3912b73d3aa1dc8f64619c82b3dacb0769e49e"
   },
   "vitepress": {
-    "repository": "https://github.com/vuejs/vitepress.git",
-    "branch": "feat/vite-8",
-    "hash": "9330f228861623c71f2598271d4e79c9c53f2c08"
+    "repository": "https://github.com/fengmk2/vitepress.git",
+    "branch": "feat/vite-8-and-fix-playwright-chromium",
+    "hash": "ff11029b8853b2f2dd8e32f7ed4581b28c020ccb",
+    "playwright": true
   },
   "tanstack-start-helloworld": {
     "repository": "https://github.com/fengmk2/tanstack-start-helloworld.git",
     "branch": "main",
-    "hash": "09bafe177bbcd1e3108c441a67601ae6380ad352"
+    "hash": "ae2cfafa384da35c57912b7e776414c1837487c2",
+    "playwright": true
   },
   "oxlint-plugin-complexity": {
     "repository": "https://github.com/itaymendel/oxlint-plugin-complexity.git",
@@ -54,7 +57,8 @@
   "vite-vue-vercel": {
     "repository": "https://github.com/fengmk2/vite-vue-vercel.git",
     "branch": "main",
-    "hash": "f2bf9fc40880c6a80f5d89bff70641c2eeaf77ef"
+    "hash": "f2bf9fc40880c6a80f5d89bff70641c2eeaf77ef",
+    "playwright": true
   },
   "viteplus-ws-repro": {
     "repository": "https://github.com/Charles5277/viteplus-ws-repro.git",
@@ -71,7 +75,7 @@
   "vinext": {
     "repository": "https://github.com/cloudflare/vinext.git",
     "branch": "main",
-    "hash": "f78dd2b39f5b02242417e0a684b1f2f55d3dbdff",
+    "hash": "884259a898f893138f719cbe7c66578684311e6b",
     "forceFreshMigration": true
   },
   "reactive-resume": {
@@ -89,8 +93,9 @@
   "npmx.dev": {
     "repository": "https://github.com/npmx-dev/npmx.dev.git",
     "branch": "main",
-    "hash": "230b7c7ddb6bb8551ce797144f0ce0f047ff8d7d",
-    "forceFreshMigration": true
+    "hash": "035776c96cf8f089c44e6011264b534b0bcde53c",
+    "forceFreshMigration": true,
+    "playwright": true
   },
   "vite-plus-jest-dom-repro": {
     "repository": "https://github.com/why-reproductions-are-required/vite-plus-jest-dom-repro.git",
@@ -101,7 +106,7 @@
   "bun-vite-template": {
     "repository": "https://github.com/why-reproductions-are-required/bun-vite-template.git",
     "branch": "master",
-    "hash": "d84099b4a153c7e0f35e510725b2ceb24c6e09ad"
+    "hash": "c507faecc4338a2d4f51c7a0b7046ed25089d232"
   },
   "vite-plus-vitest-global-type-minimal-repro": {
     "repository": "https://github.com/why-reproductions-are-required/vite-plus-vitest-global-type-minimal-repro.git",
@@ -112,12 +117,25 @@
   "vitest-playwright-repro": {
     "repository": "https://github.com/why-reproductions-are-required/vitest-playwright-repro.git",
     "branch": "main",
-    "hash": "f7252170025c01ec482fa9ad43e09b965f46928f"
+    "hash": "15cb1ac9154f9d67a987a80c08963701b99efd7c",
+    "playwright": true
   },
   "vite-plus-vitest-type-aug": {
     "repository": "https://github.com/why-reproductions-are-required/vite-plus-vitest-type-aug.git",
     "branch": "main",
     "hash": "6192f60653c124ae068efaf5d7d0a4134c95edbd",
+    "forceFreshMigration": true
+  },
+  "vite-plus-monorepo-overrides": {
+    "repository": "https://github.com/why-reproductions-are-required/vite-plus-monorepo-overrides.git",
+    "branch": "main",
+    "hash": "813ddcf84ff2f9da34e4fe5bcaaade05c64d27f8",
+    "forceFreshMigration": true
+  },
+  "varlet": {
+    "repository": "https://github.com/varletjs/varlet.git",
+    "branch": "dev",
+    "hash": "83f6c6a418ab9319e07d719d86d4fa952f99e266",
     "forceFreshMigration": true
   }
 }

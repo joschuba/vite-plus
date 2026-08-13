@@ -18,7 +18,13 @@ import { getScopeFromPackageName } from './package.ts';
 import { editYamlFile, readYamlFile } from './yaml.ts';
 
 // npm/yarn use an array; Bun catalogs and Yarn classic nohoist use an object with `packages`.
-export type NpmWorkspaces = string[] | { packages?: string[]; catalog?: Record<string, string> };
+export type NpmWorkspaces =
+  | string[]
+  | {
+      packages?: string[];
+      catalog?: Record<string, string>;
+      catalogs?: Record<string, Record<string, string>>;
+    };
 
 export function findPackageJsonFilesFromPatterns(patterns: string[], cwd: string): string[] {
   if (patterns.length === 0) {
@@ -62,13 +68,13 @@ export async function detectWorkspace(rootDir: string): Promise<WorkspaceInfoOpt
     const pnpmWorkspaceFile = path.join(result.rootDir, 'pnpm-workspace.yaml');
     const packageJsonFile = path.join(result.rootDir, 'package.json');
     if (fs.existsSync(pnpmWorkspaceFile)) {
-      const workspaceConfig = readYamlFile<{ packages?: string[] }>(pnpmWorkspaceFile);
+      const workspaceConfig = readYamlFile(pnpmWorkspaceFile) as { packages?: string[] };
       if (Array.isArray(workspaceConfig.packages)) {
         result.workspacePatterns = workspaceConfig.packages;
       }
     } else if (fs.existsSync(packageJsonFile)) {
       // Check for npm/yarn/bun workspace (array or object form)
-      const pkg = readJsonFile<{ workspaces?: NpmWorkspaces }>(packageJsonFile);
+      const pkg = readJsonFile(packageJsonFile) as { workspaces?: NpmWorkspaces };
       if (Array.isArray(pkg.workspaces)) {
         result.workspacePatterns = pkg.workspaces;
       } else if (pkg.workspaces && Array.isArray(pkg.workspaces.packages)) {
@@ -92,7 +98,7 @@ export async function detectWorkspace(rootDir: string): Promise<WorkspaceInfoOpt
     result.parentDirs = Array.from(dirs).sort();
 
     // Extract the scope from the package.json
-    const pkg = readJsonFile<{ name?: string }>(packageJsonFile);
+    const pkg = readJsonFile(packageJsonFile) as { name?: string };
     if (pkg.name) {
       result.monorepoScope = getScopeFromPackageName(pkg.name);
     }
@@ -100,6 +106,14 @@ export async function detectWorkspace(rootDir: string): Promise<WorkspaceInfoOpt
   }
 
   return result;
+}
+
+// Check if a package should run as a Bingo template (https://www.create.bingo/).
+// This is an execution hint only: a Bingo template runs through its bin entry
+// with `--skip-requests` appended. Whether a package is offered as a template
+// is governed by `create.templates` in vite.config.ts, not by this check.
+export function isBingoTemplate(pkg: { dependencies?: Record<string, string> }): boolean {
+  return !!pkg.dependencies?.bingo;
 }
 
 // Discover all workspace packages
@@ -124,26 +138,22 @@ export function discoverWorkspacePackages(
   );
   for (const packageJsonRelativePath of packageJsonRelativePaths) {
     const packageJsonPath = path.join(rootDir, packageJsonRelativePath);
-    const pkg = readJsonFile<{
+    const pkg = readJsonFile(packageJsonPath) as {
       name?: string;
       description?: string;
       version?: string;
-      dependencies?: Record<string, string>;
-      keywords?: string[];
-    }>(packageJsonPath);
+    };
     if (!pkg.name) {
       continue;
     }
-    const isTemplatePackage =
-      pkg.keywords?.includes('vite-plus-template') ||
-      pkg.keywords?.includes('bingo-template') ||
-      !!pkg.dependencies?.bingo;
     packages.push({
       name: pkg.name,
-      path: path.dirname(packageJsonRelativePath),
+      // glob returns native separators; normalize to forward slashes so the
+      // path compares cleanly against workspace-pattern-derived values like
+      // `parentDirs` on Windows (path.join accepts either separator).
+      path: path.dirname(packageJsonRelativePath).split(path.sep).join('/'),
       description: pkg.description,
       version: pkg.version,
-      isTemplatePackage,
     });
   }
 
@@ -179,14 +189,9 @@ export function updateWorkspaceConfig(projectPath: string, workspaceInfo: Worksp
   }
 
   // Derive pattern from project path (e.g., "packages/my-app" -> "packages/*", "website" -> "website", "foo/bar/app" -> "foo/bar/*")
-  let pattern = path.dirname(projectPath);
-  if (!pattern) {
-    // "website" -> "website"
-    pattern = projectPath;
-  } else {
-    // "foo/bar/app" -> "foo/bar/*"
-    pattern = `${pattern}/*`;
-  }
+  const parentDir = path.dirname(projectPath);
+  // path.dirname returns '.' for single-segment paths, treat that as no parent
+  const pattern = parentDir === '.' ? projectPath : `${parentDir}/*`;
 
   if (workspaceInfo.packageManager === PackageManager.pnpm) {
     editYamlFile(path.join(workspaceInfo.rootDir, 'pnpm-workspace.yaml'), (doc) => {

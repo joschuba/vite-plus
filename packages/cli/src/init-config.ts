@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { mergeJsonConfig } from '../binding/index.js';
+import { hasConfigKey, mergeJsonConfig } from '../binding/index.js';
+import { createDefaultVitePlusLintConfig } from './oxlint-plugin-config.ts';
 import { fmt as resolveFmt } from './resolve-fmt.ts';
 import { runCommandSilently } from './utils/command.ts';
-import { BASEURL_TSCONFIG_WARNING, VITE_PLUS_NAME } from './utils/constants.ts';
+import { BASEURL_TSCONFIG_WARNING, VITE_CONFIG_FILES, VITE_PLUS_NAME } from './utils/constants.ts';
 import { warnMsg } from './utils/terminal.ts';
-import { hasBaseUrlInTsconfig } from './utils/tsconfig.ts';
+import { fixBaseUrlInTsconfig, hasBaseUrlInTsconfig } from './utils/tsconfig.ts';
 
 interface InitCommandSpec {
   configKey: 'lint' | 'fmt';
@@ -27,14 +28,9 @@ const INIT_COMMAND_SPECS: Record<string, InitCommandSpec> = {
   },
 };
 
-const VITE_CONFIG_FILES = [
-  'vite.config.ts',
-  'vite.config.mts',
-  'vite.config.cts',
-  'vite.config.js',
-  'vite.config.mjs',
-  'vite.config.cjs',
-] as const;
+function normalizeInitCommand(command: string | undefined): string | undefined {
+  return command === 'format' ? 'fmt' : command;
+}
 
 export interface InitCommandInspection {
   handled: boolean;
@@ -133,11 +129,6 @@ export default defineConfig({});
   return viteConfigPath;
 }
 
-function hasConfigKey(viteConfigPath: string, configKey: string): boolean {
-  const viteConfig = fs.readFileSync(viteConfigPath, 'utf8');
-  return new RegExp(`\\b${configKey}\\s*:`).test(viteConfig);
-}
-
 async function vpFmt(cwd: string, filePath: string): Promise<void> {
   const { binPath, envs } = await resolveFmt();
   const result = await runCommandSilently({
@@ -157,10 +148,11 @@ async function vpFmt(cwd: string, filePath: string): Promise<void> {
 }
 
 function resolveInitSpec(command: string | undefined, args: string[]): InitCommandSpec | null {
-  if (!command) {
+  const normalizedCommand = normalizeInitCommand(command);
+  if (!normalizedCommand) {
     return null;
   }
-  const spec = INIT_COMMAND_SPECS[command];
+  const spec = INIT_COMMAND_SPECS[normalizedCommand];
   if (!spec || !hasTriggerFlag(args, spec.triggerFlags)) {
     return null;
   }
@@ -209,7 +201,7 @@ export async function applyToolInitConfigToViteConfig(
   if (!inspection.handled || !inspection.configKey) {
     return { handled: false };
   }
-  const spec = INIT_COMMAND_SPECS[command as keyof typeof INIT_COMMAND_SPECS];
+  const spec = INIT_COMMAND_SPECS[normalizeInitCommand(command) as keyof typeof INIT_COMMAND_SPECS];
   const viteConfigPath = ensureViteConfigPath(projectPath);
   const generatedConfigPath = resolveGeneratedConfigPath(
     projectPath,
@@ -231,13 +223,16 @@ export async function applyToolInitConfigToViteConfig(
 
   if (spec.configKey === 'lint' && hasTriggerFlag(args, ['--init'])) {
     const lintInitConfigPath = path.join(projectPath, '.vite-plus-lint-init.oxlintrc.json');
-    // Skip typeAware/typeCheck when tsconfig.json has baseUrl (unsupported by tsgolint)
+    await fixBaseUrlInTsconfig(projectPath);
+    // Skip typeAware/typeCheck when tsconfig still has baseUrl (unsupported by tsgolint)
     const hasBaseUrl = hasBaseUrlInTsconfig(projectPath);
-    const initOptions = hasBaseUrl ? {} : { typeAware: true, typeCheck: true };
+    const initConfig = createDefaultVitePlusLintConfig({
+      includeTypeAwareDefaults: !hasBaseUrl,
+    });
     if (hasBaseUrl) {
       warnMsg(BASEURL_TSCONFIG_WARNING);
     }
-    fs.writeFileSync(lintInitConfigPath, JSON.stringify({ options: initOptions }));
+    fs.writeFileSync(lintInitConfigPath, JSON.stringify(initConfig));
     const mergeResult = mergeJsonConfig(viteConfigPath, lintInitConfigPath, spec.configKey);
 
     if (!mergeResult.updated) {

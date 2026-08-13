@@ -6,6 +6,39 @@ import validateNpmPackageName from 'validate-npm-package-name';
 import { editJsonFile } from '../utils/json.ts';
 import { getRandomProjectName } from './random-name.ts';
 
+export type CreateEditorOption = string | false | undefined;
+type ParsedCreateEditorOption = CreateEditorOption | CreateEditorOption[];
+
+function hasExplicitEditorOptIn(editor: CreateEditorOption): boolean {
+  return typeof editor === 'string' && editor.trim() !== '';
+}
+
+export function normalizeEditorOption(editor: ParsedCreateEditorOption): CreateEditorOption {
+  if (!Array.isArray(editor)) {
+    return editor;
+  }
+  if (editor.includes(false)) {
+    return false;
+  }
+  return editor.findLast((value): value is string => typeof value === 'string');
+}
+
+export function shouldConfigureEditorsForCreate({
+  editor,
+  isMonorepo,
+}: {
+  editor: CreateEditorOption;
+  isMonorepo: boolean;
+}): boolean {
+  if (editor === false) {
+    return false;
+  }
+  if (!isMonorepo) {
+    return true;
+  }
+  return hasExplicitEditorOptIn(editor);
+}
+
 // Helper functions for file operations
 export function copy(src: string, dest: string) {
   const stat = fs.statSync(src);
@@ -110,6 +143,119 @@ export function setPackageName(projectDir: string, packageName: string) {
     pkg.name = packageName;
     return pkg;
   });
+}
+
+const RENAME_FILES = {
+  _gitignore: '.gitignore',
+  _npmrc: '.npmrc',
+  '_yarnrc.yml': '.yarnrc.yml',
+} as const;
+
+/** Rename underscore-prefixed scaffold files to their dotfile names in `projectDir`. */
+export function renameFiles(projectDir: string): void {
+  for (const [from, to] of Object.entries(RENAME_FILES)) {
+    const fromPath = path.join(projectDir, from);
+    if (fs.existsSync(fromPath)) {
+      fs.renameSync(fromPath, path.join(projectDir, to));
+    }
+  }
+}
+
+const DOTENV_GITIGNORE_LINES = [
+  '# dotenv environment variable files',
+  '.env',
+  '.env.*',
+  '!.env.example',
+] as const;
+
+/**
+ * Make sure the scaffolded project's `.gitignore` excludes default generated
+ * project artifacts.
+ *
+ * Called right after `git init` so even bundled `@org` templates (which
+ * may ship without a `.gitignore`) don't end up tracking dependencies or
+ * local environment files on the user's first commit.
+ */
+export function ensureDefaultGitignoreEntries(projectDir: string): void {
+  const gitignorePath = path.join(projectDir, '.gitignore');
+  let content = '';
+  try {
+    content = fs.readFileSync(gitignorePath, 'utf-8');
+  } catch {
+    // No existing .gitignore — we'll write a fresh one below.
+  }
+
+  const lines: string[] = [];
+  if (!hasNodeModulesGitignoreLine(content)) {
+    lines.push('node_modules');
+  }
+
+  const missingDotenvLines = DOTENV_GITIGNORE_LINES.filter(
+    (line) => !hasGitignoreLine(content, line),
+  );
+  if (missingDotenvLines.length > 0) {
+    const startsDotenvSection = missingDotenvLines[0] === DOTENV_GITIGNORE_LINES[0];
+    if (lines.length > 0 || (startsDotenvSection && content.trim() !== '')) {
+      lines.push('');
+    }
+    lines.push(...missingDotenvLines);
+  }
+
+  appendGitignoreLines(gitignorePath, content, lines);
+}
+
+function hasNodeModulesGitignoreLine(content: string): boolean {
+  return /^\s*node_modules\/?\s*$/m.test(content);
+}
+
+function hasGitignoreLine(content: string, line: string): boolean {
+  return content.split(/\r?\n/).some((entry) => entry.trim() === line);
+}
+
+function appendGitignoreLines(
+  gitignorePath: string,
+  content: string,
+  lines: readonly string[],
+): void {
+  if (lines.length === 0) {
+    return;
+  }
+  const prefix = content === '' || content.endsWith('\n') ? '' : '\n';
+  fs.appendFileSync(gitignorePath, `${prefix}${lines.join('\n')}\n`);
+}
+
+const VSCODE_SETTINGS_PATH = '.vscode/settings.json';
+const VSCODE_EXTENSIONS_PATH = '.vscode/extensions.json';
+const VSCODE_CONFIG_UNIGNORE_BLOCK = [
+  '!.vscode/',
+  `!${VSCODE_SETTINGS_PATH}`,
+  `!${VSCODE_EXTENSIONS_PATH}`,
+] as const;
+
+/**
+ * Make generated VS Code workspace config trackable when `vp create` writes VS Code config.
+ */
+export function ensureGitignoreVsCodeEditorConfigs(projectDir: string): void {
+  if (!fs.existsSync(path.join(projectDir, VSCODE_SETTINGS_PATH))) {
+    return;
+  }
+
+  const gitignorePath = path.join(projectDir, '.gitignore');
+  let content: string;
+  try {
+    content = fs.readFileSync(gitignorePath, 'utf-8');
+  } catch {
+    return;
+  }
+
+  appendGitignoreVsCodeEditorConfigsBlock(gitignorePath, content);
+}
+
+function appendGitignoreVsCodeEditorConfigsBlock(gitignorePath: string, content: string): void {
+  if (content.trimEnd().endsWith(VSCODE_CONFIG_UNIGNORE_BLOCK.join('\n'))) {
+    return;
+  }
+  appendGitignoreLines(gitignorePath, content, VSCODE_CONFIG_UNIGNORE_BLOCK);
 }
 
 export function formatDisplayTargetDir(targetDir: string) {

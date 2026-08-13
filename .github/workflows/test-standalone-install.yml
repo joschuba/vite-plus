@@ -8,6 +8,9 @@ on:
     paths:
       - 'packages/cli/install.sh'
       - 'packages/cli/install.ps1'
+      - 'crates/vp_installer/**'
+      - 'crates/vp_pm_cli/**'
+      - 'crates/vp_setup/**'
       - '.github/workflows/test-standalone-install.yml'
 
 concurrency:
@@ -17,9 +20,6 @@ concurrency:
 defaults:
   run:
     shell: bash
-
-env:
-  VP_VERSION: alpha
 
 jobs:
   test-install-sh:
@@ -38,7 +38,7 @@ jobs:
           - os: macos-latest
             name: macOS ARM64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Run install.sh
         run: cat packages/cli/install.sh | bash
@@ -120,7 +120,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Make shell config files read-only
         run: |
@@ -155,10 +155,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
           platforms: arm64
 
@@ -166,7 +166,6 @@ jobs:
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
-            -e VP_VERSION=alpha \
             ubuntu:20.04 bash -c "
               ls -al ~/
               apt-get update && apt-get install -y curl ca-certificates
@@ -198,7 +197,7 @@ jobs:
               done
               vp env doctor
 
-              export VITE_LOG=trace
+              export VP_LOG=trace
               vp env run --node 24 -- node -p \"process.versions\"
 
               # Verify upgrade
@@ -219,13 +218,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Run install.sh in Alpine container
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
-            -e VP_VERSION=alpha \
             -e CI=true \
             alpine:3.21 sh -c "
               # libstdc++: required by unofficial-builds Node.js musl binary
@@ -272,10 +270,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
           platforms: arm64
 
@@ -283,7 +281,6 @@ jobs:
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
-            -e VP_VERSION=alpha \
             -e CI=true \
             alpine:3.21 sh -c "
               # libstdc++ is needed by unofficial-builds Node.js musl binary
@@ -310,7 +307,7 @@ jobs:
               done
               vp env doctor
 
-              export VITE_LOG=trace
+              export VP_LOG=trace
               vp env run --node 24 -- node -p \"process.versions\"
 
               # FIXME: QEMU doesn't support all syscalls needed by rolldown/tsdown
@@ -327,11 +324,19 @@ jobs:
 
   test-install-ps1-v5:
     name: Test install.ps1 (Windows x64, PowerShell 5.1)
-    runs-on: windows-latest
+    runs-on: namespace-profile-windows-4c-8g
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - name: Pin VP_HOME to USERPROFILE
+        # Namespace's Windows runners run jobs under a service account whose real
+        # profile (C:\Windows\system32\config\systemprofile) differs from
+        # %USERPROFILE%; vp resolves its home from the OS profile. Pin VP_HOME so
+        # the install, generated shims, and these assertions share one location.
+        shell: bash
+        run: echo "VP_HOME=$USERPROFILE\.vite-plus" >> $GITHUB_ENV
 
       - name: Assert PowerShell 5.x
         shell: powershell
@@ -413,7 +418,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Run install.ps1
         shell: pwsh
@@ -476,16 +481,27 @@ jobs:
 
   test-install-ps1-v76:
     name: Test install.ps1 (Windows x64, PowerShell 7.6)
-    runs-on: windows-latest
+    runs-on: namespace-profile-windows-4c-8g
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - name: Pin VP_HOME to USERPROFILE
+        # Namespace's Windows runners run jobs under a service account whose real
+        # profile (C:\Windows\system32\config\systemprofile) differs from
+        # %USERPROFILE%; vp resolves its home from the OS profile. Pin VP_HOME so
+        # the install, generated shims, and these assertions share one location.
+        shell: bash
+        run: echo "VP_HOME=$USERPROFILE\.vite-plus" >> $GITHUB_ENV
 
       - name: Install PowerShell 7.6
         shell: pwsh
         run: |
-          dotnet tool install --global PowerShell --version 7.6.0
+          # --tool-path (not --global): a global tool install resolves the target
+          # under the OS user profile, which is the service-account systemprofile
+          # on Namespace, not %USERPROFILE%. An explicit path is account-independent.
+          dotnet tool install --tool-path "$env:USERPROFILE\.dotnet\tools" PowerShell --version 7.6.0
           $pwsh76 = "$env:USERPROFILE\.dotnet\tools\pwsh.exe"
           echo "PWSH76=$pwsh76" >> $env:GITHUB_ENV
           $ver = & $pwsh76 -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
@@ -554,13 +570,99 @@ jobs:
           vp upgrade --rollback
           vp --version
 
+  test-install-ps1-release-age:
+    name: Test install.ps1 (minimum-release-age)
+    runs-on: namespace-profile-windows-4c-8g
+    permissions:
+      contents: read
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - name: Verify minimumReleaseAge blocks non-interactive install
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:CI = "true"
+          $env:VP_NODE_MANAGER = "no"
+          $env:VP_HOME = Join-Path $env:RUNNER_TEMP "vite-plus-release-age"
+
+          $npmrc = Join-Path $env:USERPROFILE ".npmrc"
+          $backup = Join-Path $env:RUNNER_TEMP ".npmrc.backup"
+
+          if (Test-Path $npmrc) {
+            Move-Item -Path $npmrc -Destination $backup -Force
+          }
+
+          try {
+            Set-Content -Path $npmrc -Value "minimum-release-age=10000000"
+
+            $output = & powershell -NoProfile -ExecutionPolicy Bypass -File .\packages\cli\install.ps1 2>&1
+            $exitCode = $LASTEXITCODE
+            $text = $output -join "`n"
+            Write-Host $text
+
+            if ($exitCode -eq 0) {
+              Write-Error "Expected install.ps1 to fail when pnpm minimum-release-age blocks vite-plus"
+              exit 1
+            }
+
+            if ($text -notmatch "Install blocked by your minimumReleaseAge setting") {
+              Write-Error "Expected release-age block message in installer output"
+              exit 1
+            }
+
+            if ($text -notmatch "ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge") {
+              Write-Error "Expected pnpm release-age details in installer output"
+              exit 1
+            }
+
+            $installLog = Get-ChildItem -Path $env:VP_HOME -Recurse -Filter install.log | Select-Object -First 1
+            if (-not $installLog) {
+              Write-Error "Expected install.log to be written under VP_HOME"
+              exit 1
+            }
+
+            $logText = Get-Content -Path $installLog.FullName -Raw
+            if ($logText -notmatch "ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge") {
+              Write-Error "Expected pnpm release-age details in install.log"
+              exit 1
+            }
+
+            $overrideFiles = Get-ChildItem -Path $env:VP_HOME -Recurse -Force -Filter .npmrc |
+              Where-Object { $_.FullName -notmatch "\\js_runtime\\" }
+            if ($overrideFiles) {
+              Write-Host "Unexpected override files:"
+              $overrideFiles | ForEach-Object { Write-Host $_.FullName }
+              Write-Error "Non-interactive install must not write minimum-release-age overrides"
+              exit 1
+            }
+
+            # The child install.ps1 is expected to fail in this test. Reset the
+            # native command exit code so the GitHub Actions PowerShell wrapper
+            # does not fail the step after our assertions pass.
+            $global:LASTEXITCODE = 0
+          } finally {
+            Remove-Item -Path $npmrc -Force -ErrorAction SilentlyContinue
+            if (Test-Path $backup) {
+              Move-Item -Path $backup -Destination $npmrc -Force
+            }
+          }
+
   test-install-ps1:
     name: Test install.ps1 (Windows x64)
+    # Stays on GitHub-hosted windows-latest, NOT the Namespace Windows runner.
+    # This job runs `vp env doctor` under bash `set -e`, and doctor compares vp's
+    # resolved home against PATH. Namespace's Windows runners execute jobs under a
+    # Session-0 service account whose real profile is
+    # C:\Windows\system32\config\systemprofile, not %USERPROFILE%, so even with
+    # VP_HOME set the installed vp resolves the systemprofile home and doctor
+    # fails. The other install jobs pass on Namespace because they don't run
+    # `vp env doctor` under `set -e`.
     runs-on: windows-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
       - name: Run install.ps1
         shell: pwsh
@@ -591,7 +693,7 @@ jobs:
           echo "PATH: $env:Path"
           vp --version
           vp --help
-          # $env:VITE_LOG = "trace"
+          # $env:VP_LOG = "trace"
           # test create command
           vp create vite --no-interactive --no-agent -- hello --no-interactive -t vanilla
           cd hello && vp run build && vp --version
@@ -706,3 +808,63 @@ jobs:
           which npm
           which npx
           which vp
+
+  test-vp-setup-exe:
+    name: Test vp-setup.exe (pwsh)
+    runs-on: namespace-profile-windows-4c-8g
+    permissions:
+      contents: read
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+      - uses: ./.github/actions/clone
+
+      - name: Pin VP_HOME to USERPROFILE
+        # Namespace's Windows runners run jobs under a service account whose real
+        # profile (C:\Windows\system32\config\systemprofile) differs from
+        # %USERPROFILE%; vp-setup.exe installs into VP_HOME (falling back to the OS
+        # profile). Pin it so the install and these assertions share one location.
+        shell: bash
+        run: echo "VP_HOME=$USERPROFILE\.vite-plus" >> $GITHUB_ENV
+
+      - name: Setup Dev Drive
+        uses: samypr100/setup-dev-drive@30f0f98ae5636b2b6501e181dfb3631b9974818d # v4.0.0
+        with:
+          drive-size: 12GB
+          drive-format: ReFS
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
+
+      - uses: oxc-project/setup-rust@68c3199c5339f965e6e163924c3c450773eba42b # main (pending v1.0.17 — Swatinem/rust-cache v2.9.1 for node24)
+        with:
+          target-dir: ${{ format('{0}/target', env.DEV_DRIVE) }}
+
+      - name: Build vp-setup.exe
+        shell: bash
+        run: cargo build --release -p vp_installer
+
+      - name: Install via vp-setup.exe (silent)
+        shell: pwsh
+        run: ${{ format('{0}/target/release/vp-setup.exe', env.DEV_DRIVE) }}
+
+      - name: Set PATH
+        shell: bash
+        run: echo "$USERPROFILE/.vite-plus/bin" >> $GITHUB_PATH
+
+      - name: Verify installation
+        shell: pwsh
+        run: |
+          vp --version
+          vp --help
+
+      - name: Verify installation (cmd)
+        shell: cmd
+        run: |
+          vp --version
+          vp --help
+
+      - name: Verify installation (bash)
+        shell: bash
+        run: |
+          vp --version
+          vp --help

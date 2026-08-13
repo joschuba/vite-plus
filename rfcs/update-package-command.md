@@ -186,7 +186,7 @@ vp update react --latest
 
 #### 1. Command Structure
 
-**File**: `crates/vite_task/src/lib.rs`
+**File**: `crates/vt/src/lib.rs`
 
 Add new command variant:
 
@@ -401,7 +401,7 @@ impl PackageManager {
 
 #### 3. Update Command Implementation
 
-**File**: `crates/vite_task/src/update.rs` (new file)
+**File**: `crates/vt/src/update.rs` (new file)
 
 ```rust
 pub struct UpdateCommand {
@@ -646,6 +646,7 @@ vp update react --range # Updates within semver range
 
 - pnpm@9.x [WIP]
 - pnpm@10.x
+- pnpm@11.x
 - yarn@1.x [WIP]
 - yarn@4.x
 - npm@10.x

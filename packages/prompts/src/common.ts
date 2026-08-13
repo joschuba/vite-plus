@@ -55,6 +55,8 @@ export const symbol = (state: State) => {
       return color.yellow(S_STEP_ERROR);
     case 'submit':
       return completeColor(S_STEP_SUBMIT);
+    default:
+      return color.blue(S_STEP_ACTIVE);
   }
 };
 
@@ -69,6 +71,8 @@ export const symbolBar = (state: State) => {
       return color.yellow(S_BAR);
     case 'submit':
       return completeColor(S_BAR);
+    default:
+      return color.blue(S_BAR);
   }
 };
 
@@ -77,4 +81,11 @@ export interface CommonOptions {
   output?: Writable;
   signal?: AbortSignal;
   withGuide?: boolean;
+  /**
+   * Stable identifier used in snapshot-test milestones
+   * (`<kind>:<testId>:<state>`). Only read when `VP_EMIT_MILESTONES=1`;
+   * defaults to the prompt kind. Set it when a flow shows several prompts of
+   * the same kind, so tests can target each one unambiguously.
+   */
+  testId?: string;
 }

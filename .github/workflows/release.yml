@@ -1,229 +1,114 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      npm_tag:
-        description: 'npm tag for publish'
-        required: true
-        default: 'latest'
-        type: choice
-        options:
-          - latest
-          - alpha
-      version:
-        description: 'Override version (leave empty to auto-compute). Use when retrying a failed publish.'
-        required: false
-        default: ''
-        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'packages/cli/package.json'
 
 permissions: {}
 
 env:
   RELEASE_BUILD: 'true'
   DEBUG: 'napi:*'
-  NPM_TAG: ${{ inputs.npm_tag }}
 
 jobs:
-  prepare:
+  check:
+    if: github.repository == 'voidzero-dev/vite-plus'
+    name: Check version
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
+      version_changed: ${{ steps.version.outputs.changed }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-      - uses: ./.github/actions/set-snapshot-version
-        if: ${{ inputs.version == '' }}
-        id: computed
-        with:
-          npm_tag: ${{ inputs.npm_tag }}
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
 
-      - name: Set final version
+      - name: Check version changes
+        uses: EndBug/version-check@095362f3cd50f690c8fa0e6afeea81834bd8d320 # v3.0.0
         id: version
-        run: echo "version=${{ inputs.version || steps.computed.outputs.version }}" >> $GITHUB_OUTPUT
+        with:
+          static-checking: localIsNew
+          file-url: https://unpkg.com/vite-plus@latest/package.json
+          file-name: packages/cli/package.json
 
   build-rust:
-    runs-on: ${{ matrix.settings.os }}
-    needs: prepare
+    name: Build bindings and binaries
+    needs: check
+    if: needs.check.outputs.version_changed == 'true'
     permissions:
       contents: read
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
+    uses: ./.github/workflows/reusable-release-build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      cache-key: release
+
+  request-approval:
+    runs-on: ubuntu-latest
+    needs: [check, build-rust]
+    if: needs.check.outputs.version_changed == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/clone
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-      - uses: oxc-project/setup-rust@23f38cfb0c04af97a055f76acee94d5be71c7c82 # v1.0.16
+      - uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # v7.0.0
         with:
-          save-cache: ${{ github.ref_name == 'main' }}
-          cache-key: release
-
-      - name: Rustup Adds Target
-        run: rustup target add ${{ matrix.settings.target }}
-
-      - uses: oxc-project/setup-node@4c26e7cb3605b6bdef5450dacd02c434b10fd8ba # v1.2.0
-
-      - name: Set binding version
-        shell: bash
-        run: |
-          pnpm exec tool replace-file-content packages/cli/binding/Cargo.toml 'version = "0.0.0"' 'version = "${{ env.VERSION }}"'
-          pnpm exec tool replace-file-content crates/vite_global_cli/Cargo.toml 'version = "0.0.0"' 'version = "${{ env.VERSION }}"'
-          cat crates/vite_global_cli/Cargo.toml
-
-      - name: Verify version replacement
-        shell: bash
-        run: |
-          if grep -q 'version = "0.0.0"' crates/vite_global_cli/Cargo.toml; then
-            echo "ERROR: Version replacement failed for crates/vite_global_cli/Cargo.toml"
-            head -5 crates/vite_global_cli/Cargo.toml
-            exit 1
-          fi
-          if grep -q 'version = "0.0.0"' packages/cli/binding/Cargo.toml; then
-            echo "ERROR: Version replacement failed for packages/cli/binding/Cargo.toml"
-            head -5 packages/cli/binding/Cargo.toml
-            exit 1
-          fi
-          echo "Version replacement verified successfully"
-
-      - name: Build
-        uses: ./.github/actions/build-upstream
-        with:
-          target: ${{ matrix.settings.target }}
-
-      - name: Upload Vite+ native artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: vite-plus-native-${{ matrix.settings.target }}
-          path: ./packages/cli/binding/*.node
-          if-no-files-found: error
-
-      - name: Upload Rust CLI binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: vite-global-cli-${{ matrix.settings.target }}
-          path: |
-            ./target/${{ matrix.settings.target }}/release/vp
-            ./target/${{ matrix.settings.target }}/release/vp.exe
-            ./target/${{ matrix.settings.target }}/release/vp-shim.exe
-          if-no-files-found: error
-
-      - name: Remove .node files before upload dist
-        if: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' }}
-        run: |
-          rm ./packages/core/dist/**/*.node
-
-      - name: Upload core dist
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' }}
-        with:
-          name: core
-          path: ./packages/core/dist
-          if-no-files-found: error
-
-      - name: Upload cli dist
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' }}
-        with:
-          name: cli
-          path: ./packages/cli/dist
-          if-no-files-found: error
-
-      - name: Upload cli skills (docs for agent integration)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' }}
-        with:
-          name: cli-skills
-          path: ./packages/cli/skills
-          if-no-files-found: error
-
-      - name: Upload LICENSE files
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' }}
-        with:
-          name: licenses
-          path: |
-            ./packages/core/LICENSE
-            ./packages/cli/LICENSE
-          if-no-files-found: error
+          webhook-url: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          content: 'Requesting approval for vite-plus v${{ needs.check.outputs.version }}: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml'
 
   Release:
     runs-on: ubuntu-latest
-    needs: [prepare, build-rust]
+    environment: release
+    needs: [check, build-rust, request-approval]
+    if: needs.check.outputs.version_changed == 'true'
     permissions:
       contents: write
       packages: write
       id-token: write # Required for OIDC
     env:
-      VERSION: ${{ needs.prepare.outputs.version }}
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
       - uses: ./.github/actions/clone
 
-      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version-file: .node-version
+          node-version: '24.18.0'
           package-manager-cache: false
           registry-url: 'https://registry.npmjs.org'
-          cache: 'pnpm'
 
       - name: Install dependencies
         run: pnpm install
 
       - name: Download cli dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: packages/cli/dist
           pattern: cli
           merge-multiple: true
 
-      - name: Download cli skills
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download cli docs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: packages/cli/skills
-          pattern: cli-skills
+          path: packages/cli/docs
+          pattern: cli-docs
           merge-multiple: true
 
       - name: Download cli binding
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: packages/cli/artifacts
           pattern: vite-plus-native-*
 
       - name: Download core dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: packages/core/dist
           pattern: core
           merge-multiple: true
 
       - name: Download LICENSE files
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: packages
           pattern: licenses
@@ -236,75 +121,59 @@ jobs:
           upload: 'false'
 
       - name: Download Rust CLI binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: rust-cli-artifacts
-          pattern: vite-global-cli-*
+          pattern: vp-global-cli-*
 
-      - name: Move Rust CLI binaries to target directories
+      - name: Download installer binaries (Windows)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: installer-artifacts
+          pattern: vp-setup-*
+
+      - name: Prepare installer binaries for release
         run: |
-          # Move each artifact's binary to the correct target directory
-          for artifact_dir in rust-cli-artifacts/vite-global-cli-*/; do
+          mkdir -p installer-release
+          for artifact_dir in installer-artifacts/vp-setup-*/; do
             if [ -d "$artifact_dir" ]; then
-              # Extract target name from directory (e.g., vite-global-cli-x86_64-unknown-linux-gnu -> x86_64-unknown-linux-gnu)
               dir_name=$(basename "$artifact_dir")
-              target_name=${dir_name#vite-global-cli-}
-              # Create target directory and copy binary
-              mkdir -p "target/${target_name}/release"
-              cp -r "$artifact_dir"* "target/${target_name}/release/"
+              target_name=${dir_name#vp-setup-}
+              cp "$artifact_dir/vp-setup.exe" "installer-release/vp-setup-${target_name}.exe"
             fi
           done
-          # Show what we have (fail if no binaries found)
-          vp_files=$(find target -name "vp*" -type f 2>/dev/null || echo "")
-          if [ -z "$vp_files" ]; then
-            echo "Error: No vp binaries found in target directory"
-            echo "Artifact contents:"
-            find rust-cli-artifacts -type f || true
-            exit 1
-          fi
-          echo "Found binaries:"
-          echo "$vp_files"
+          echo "Installer binaries:"
+          ls -la installer-release/ || echo "No installer binaries found"
 
-      - name: Set npm packages version
-        run: |
-          sed -i 's/"version": "0.0.0"/"version": "${{ env.VERSION }}"/' packages/core/package.json
-          sed -i 's/"version": "0.0.0"/"version": "${{ env.VERSION }}"/' packages/test/package.json
-          sed -i 's/"version": "0.0.0"/"version": "${{ env.VERSION }}"/' packages/cli/package.json
+      - name: Download release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: binary-release
+          pattern: vp-release-archive-*
+          merge-multiple: true
 
-      - name: Build test
-        run: pnpm --filter=@voidzero-dev/vite-plus-test build
-
-      - name: 'Setup npm'
-        run: |
-          npm install -g npm@latest
-
-      - name: Publish native addons
-        run: |
-          node ./packages/cli/publish-native-addons.ts
+      - name: Prepare and publish native addons
+        run: node ./packages/cli/publish-native-addons.ts --mode npm
 
       - name: Publish
         run: |
-          pnpm publish --filter=./packages/core --tag ${{ inputs.npm_tag }} --access public --no-git-checks
-          pnpm publish --filter=./packages/test --tag ${{ inputs.npm_tag }} --access public --no-git-checks
-          pnpm publish --filter=./packages/cli --tag ${{ inputs.npm_tag }} --access public --no-git-checks
+          pnpm publish --filter=./packages/core --tag latest --access public --no-git-checks
+          pnpm publish --filter=./packages/cli --tag latest --access public --no-git-checks
 
       - name: Create release body
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ inputs.npm_tag }}" == "latest" ]]; then
-            INSTALL_BASH="curl -fsSL https://vite.plus | bash"
-            INSTALL_PS1="irm https://vite.plus/ps1 | iex"
-          else
-            INSTALL_BASH="curl -fsSL https://vite.plus | VP_VERSION=${{ env.VERSION }} bash"
-            INSTALL_PS1="\\\$env:VP_VERSION=\\\"${{ env.VERSION }}\\\"; irm https://vite.plus/ps1 | iex"
-          fi
+          INSTALL_BASH="curl -fsSL https://vite.plus | bash"
+          INSTALL_PS1="irm https://vite.plus/ps1 | iex"
           cat > ./RELEASE_BODY.md <<EOF
-          ## vite-plus v${{ env.VERSION }}
+          ## vite-plus v${VERSION}
 
           ### Published Packages
 
-          - \`@voidzero-dev/vite-plus-core@${{ env.VERSION }}\`
-          - \`@voidzero-dev/vite-plus-test@${{ env.VERSION }}\`
-          - \`vite-plus@${{ env.VERSION }}\`
+          - \`@voidzero-dev/vite-plus-core@${VERSION}\`
+          - \`vite-plus@${VERSION}\`
 
           ### Installation
 
@@ -318,23 +187,137 @@ jobs:
           ${INSTALL_PS1}
           \`\`\`
 
-          View the full commit: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+          Or download and run \`vp-setup.exe\` from the assets below.
+
+          View the full commit: https://github.com/${REPOSITORY}/commit/${COMMIT_SHA}
           EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         id: release
         with:
           body_path: ./RELEASE_BODY.md
-          draft: false
-          make_latest: ${{ inputs.npm_tag == 'latest' }}
-          prerelease: ${{ inputs.npm_tag == 'alpha' }}
+          draft: true
+          make_latest: true
+          prerelease: false
           name: vite-plus v${{ env.VERSION }}
           tag_name: v${{ env.VERSION }}
           target_commitish: ${{ github.sha }}
+          files: |
+            installer-release/vp-setup-*.exe
+            binary-release/vp-*.tar.gz
+            binary-release/vp-*.zip
 
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v${VERSION}" --draft=false --repo "${{ github.repository }}"
+
+  # Deploy viteplus.dev from the release commit after the npm packages and the
+  # GitHub release are published, so the site and the install scripts always
+  # match the released vp. Skipped for prereleases: production docs must keep
+  # describing the latest stable release. See rfcs/deploy-docs-on-release.md.
+  deploy-docs:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    needs: [check, Release]
+    if: >-
+      needs.check.outputs.version_changed == 'true' &&
+      !contains(needs.check.outputs.version, '-')
+    # Shared with deploy-docs.yml so production deploys serialize across both
+    # entry paths. Only the newest pending run survives in the group; if this
+    # job's pending run is replaced by a manual dispatch, the canceled job
+    # holds back discord-notify and the deploy must be re-run.
+    concurrency:
+      group: deploy-docs
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - uses: ./.github/actions/deploy-docs
+        with:
+          void-project: viteplus
+          void-token: ${{ secrets.VOID_TOKEN }}
+
+  # Build and push the official toolchain Docker image to GHCR after the npm
+  # release is published (the image installs vp from npm, so the version must
+  # exist first). See docker/Dockerfile and docs/guide/docker.md.
+  publish-docker:
+    name: Publish Docker image
+    runs-on: ubuntu-latest
+    needs: [check, Release]
+    if: needs.check.outputs.version_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      IMAGE: ghcr.io/voidzero-dev/vite-plus
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: docker
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VP_VERSION=${{ env.VERSION }}
+          provenance: false
+
+  # Announce the release on Discord last, after the Docker images and the docs
+  # are published, so the message never points at a missing image or a site
+  # that still shows the previous release.
+  discord-notify:
+    name: Notify Discord
+    runs-on: ubuntu-latest
+    # publish-docker already needs Release, so depending on it orders this last.
+    # deploy-docs is skipped for prereleases; gate on its result explicitly so
+    # prerelease announcements still go out, while a failed docs deploy on a
+    # stable release holds the announcement back.
+    needs: [check, publish-docker, deploy-docs]
+    if: >-
+      !cancelled() &&
+      needs.check.outputs.version_changed == 'true' &&
+      needs.publish-docker.result == 'success' &&
+      (needs.deploy-docs.result == 'success' || needs.deploy-docs.result == 'skipped')
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      IMAGE: ghcr.io/voidzero-dev/vite-plus
+    steps:
+      # Non-blocking: a webhook failure must not mark the release run as failed
+      # (npm, GitHub release, and Docker images are already published).
       - name: Send Discord notification
-        if: ${{ inputs.npm_tag == 'latest' }}
+        continue-on-error: true
         uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
@@ -344,8 +327,10 @@ jobs:
 
             **Published Packages:**
             • @voidzero-dev/vite-plus-core@${{ env.VERSION }}
-            • @voidzero-dev/vite-plus-test@${{ env.VERSION }}
             • vite-plus@${{ env.VERSION }}
+
+            **Docker (GHCR):**
+            • `docker pull ${{ env.IMAGE }}:${{ env.VERSION }}`
 
             **Install:**
             • macOS/Linux: `curl -fsSL https://vite.plus | bash`

@@ -9,17 +9,32 @@
 #   VP_HOME - Installation directory (default: $env:USERPROFILE\.vite-plus)
 #   NPM_CONFIG_REGISTRY - Custom npm registry URL (default: https://registry.npmjs.org)
 #   VP_LOCAL_TGZ - Path to local vite-plus.tgz (for development/testing)
+#   VP_PR_VERSION - PR number or commit SHA to install from the registry bridge
+#                   (for temporary testing of unreleased builds, e.g. VP_PR_VERSION=1569).
+#                   When set, overrides VP_VERSION and installs the clearly-defined
+#                   0.0.0-commit.<sha> build through the bridge instead of npm.
 
 $ErrorActionPreference = "Stop"
 
 $ViteVersion = if ($env:VP_VERSION) { $env:VP_VERSION } else { "latest" }
 $InstallDir = if ($env:VP_HOME) { $env:VP_HOME } else { "$env:USERPROFILE\.vite-plus" }
+# Use ~ shorthand if install dir is under USERPROFILE, matching the final summary output
+$NodeManagerBinDisplay = (Join-Path $InstallDir.TrimEnd('\', '/') "bin") -replace [regex]::Escape($env:USERPROFILE), '~'
 # npm registry URL (strip trailing slash if present)
 $NpmRegistry = if ($env:NPM_CONFIG_REGISTRY) { $env:NPM_CONFIG_REGISTRY.TrimEnd('/') } else { "https://registry.npmjs.org" }
 # Local tarball for development/testing
 $LocalTgz = $env:VP_LOCAL_TGZ
 # Local binary path (set by install-global-cli.ts for local dev)
 $LocalBinary = $env:VP_LOCAL_BINARY
+# PR number or commit SHA to install as a test build (registry bridge mode)
+$PrVersion = $env:VP_PR_VERSION
+# Registry bridge that serves PR preview builds as clearly-versioned packages.
+# The pkg.pr.new-style download URL (BridgeDownloadBase) 302-redirects to a
+# canonical 0.0.0-commit.<sha> tarball; the registry (BridgeRegistry) resolves
+# those commit versions (and proxies everything else to npmjs) so a full install
+# pulls a coherent, clearly-defined test build.
+$BridgeDownloadBase = "https://registry-bridge.viteplus.dev/voidzero-dev/vite-plus"
+$BridgeRegistry = "https://registry-bridge.viteplus.dev/"
 
 function Write-Info {
     param([string]$Message)
@@ -39,11 +54,366 @@ function Write-Warn {
     Write-Host $Message
 }
 
+# Exit code when a Windows native binary cannot load required DLLs (STATUS_DLL_NOT_FOUND).
+$script:DllNotFoundExitCode = -1073741515
+
+function Test-IsDllNotFoundExitCode {
+    param([int]$ExitCode)
+    if ($ExitCode -eq $script:DllNotFoundExitCode) {
+        return $true
+    }
+    if ($ExitCode -eq 3221225781) {
+        return $true
+    }
+    if ($ExitCode -lt 0) {
+        $hex = '{0:X8}' -f ($ExitCode -band 0xFFFFFFFF)
+        return $hex -eq 'C0000135'
+    }
+    return $false
+}
+
+function Get-DllNotFoundInstallMessage {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+    $vcUrl = if ($arch -eq "arm64") {
+        "https://aka.ms/vs/17/release/vc_redist.arm64.exe"
+    } else {
+        "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    }
+    return @"
+vp.exe could not start (exit code 0xC0000135).
+This usually means Microsoft Visual C++ 2015-2022 Redistributable ($arch) is not installed.
+
+Install: $vcUrl
+Then re-run: irm https://vite.plus/ps1 | iex
+"@
+}
+
+# Internal stop signal: halts install without re-printing an error we already wrote.
+$script:InstallStopSignal = 'VP_INSTALL_STOP'
+
+function Test-IsInstallStopException {
+    param(
+        [System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+    return $ErrorRecord.Exception.Message -eq $script:InstallStopSignal
+}
+
+function Test-ShouldKeepShellOpenAfterFailure {
+    # Only `irm ... | iex` typed in an already-open interactive shell should keep the
+    # session alive. CI, script files, and `powershell -Command "..."` must exit non-zero.
+    if ($env:CI -eq "true") {
+        return $false
+    }
+    if ($PSCommandPath) {
+        return $false
+    }
+    if (-not [Environment]::UserInteractive) {
+        return $false
+    }
+    try {
+        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").CommandLine
+        if ($commandLine -match '(^|\s)-Command(\s|$)') {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+function Exit-Installer {
+    param([int]$Code = 1)
+    $global:LASTEXITCODE = $Code
+    if (-not (Test-ShouldKeepShellOpenAfterFailure)) {
+        exit $Code
+    }
+    throw $script:InstallStopSignal
+}
+
 function Write-Error-Exit {
     param([string]$Message)
     Write-Host "error: " -ForegroundColor Red -NoNewline
     Write-Host $Message
-    exit 1
+    Exit-Installer
+}
+
+function Test-ReleaseAgeError {
+    param([string]$LogPath)
+    if (-not (Test-Path $LogPath)) {
+        return $false
+    }
+
+    $content = Get-Content -Path $LogPath -Raw
+    # This wrapper install path is pinned to pnpm via packageManager, so this
+    # detection follows pnpm's resolver/reporter output rather than npm/yarn.
+    #
+    # pnpm's PnpmError prefixes internal codes with ERR_PNPM_, so
+    # NO_MATURE_MATCHING_VERSION is normally printed as
+    # ERR_PNPM_NO_MATURE_MATCHING_VERSION. npm-resolver emits that code with the
+    # "does not meet the minimumReleaseAge constraint" message when
+    # publishedBy/minimumReleaseAge rejects a matching version.
+    # https://github.com/pnpm/pnpm/blob/16cfde66ec71125d692ea828eba2a5f9b3cc54fc/core/error/src/index.ts#L18-L20
+    # https://github.com/pnpm/pnpm/blob/16cfde66ec71125d692ea828eba2a5f9b3cc54fc/resolving/npm-resolver/src/index.ts#L76-L84
+    #
+    # default-reporter may append guidance mentioning minimumReleaseAgeExclude
+    # when the error has an immatureVersion, so that token is also a useful
+    # release-age signal. minimum-release-age is pnpm's .npmrc key; npm's
+    # min-release-age is intentionally not treated as a pnpm signal here.
+    # https://github.com/pnpm/pnpm/blob/16cfde66ec71125d692ea828eba2a5f9b3cc54fc/cli/default-reporter/src/reportError.ts#L163-L164
+    # https://github.com/pnpm/pnpm/blob/16cfde66ec71125d692ea828eba2a5f9b3cc54fc/config/reader/src/types.ts#L73-L74
+    $hasReleaseAgeText = $content -match "does not meet the minimumReleaseAge constraint" `
+        -or $content -match "minimumReleaseAge" `
+        -or $content -match "minimumReleaseAgeExclude" `
+        -or $content -match "minimum release age" `
+        -or $content -match "minimum-release-age"
+
+    # pnpm can also surface ERR_PNPM_NO_MATCHING_VERSION when minimumReleaseAge
+    # filters out all candidates. That code is also used for real missing
+    # versions, so require age-gate context before prompting for a bypass.
+    # https://github.com/pnpm/pnpm/blob/16cfde66ec71125d692ea828eba2a5f9b3cc54fc/deps/inspection/outdated/src/createManifestGetter.ts#L66-L76
+    return $content -match "ERR_PNPM_NO_MATURE_MATCHING_VERSION" `
+        -or $content -match "NO_MATURE_MATCHING_VERSION" `
+        -or (($content -match "ERR_PNPM_NO_MATCHING_VERSION") -and $hasReleaseAgeText) `
+        -or $hasReleaseAgeText
+}
+
+function Confirm-ReleaseAgeOverride {
+    if ($env:CI -eq "true") {
+        return $false
+    }
+    if (-not [Environment]::UserInteractive) {
+        return $false
+    }
+
+    Write-Host ""
+    Write-Warn "Your minimumReleaseAge setting prevented installing vite-plus@$ViteVersion."
+    Write-Host "This setting helps protect against newly published compromised packages."
+    Write-Host "Proceeding will disable this protection for this Vite+ install only."
+    $response = Read-Host "Do you want to proceed? (y/N)"
+    return $response -match "^(?i:y|yes)$"
+}
+
+function Write-ReleaseAgeOverride {
+    # Append idempotently so a bridge registry line written for PR builds survives.
+    $npmrc = Join-Path $VersionDir ".npmrc"
+    if ((-not (Test-Path $npmrc)) -or (-not (Select-String -Path $npmrc -Pattern '^minimum-release-age=' -Quiet))) {
+        Add-Content -Path $npmrc -Value "minimum-release-age=0"
+    }
+}
+
+function Normalize-InstallDir {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $Path
+    }
+
+    try {
+        if (Test-Path -LiteralPath $Path -PathType Container) {
+            return (Resolve-Path -LiteralPath $Path).ProviderPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        }
+
+        return [System.IO.Path]::GetFullPath($Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    } catch {
+        return $Path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    }
+}
+
+function Test-SafeInstallDirToRemove {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    $normalized = Normalize-InstallDir $Path
+    $root = [System.IO.Path]::GetPathRoot($normalized)
+    $home = Normalize-InstallDir $env:USERPROFILE
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    $unsafeDirs = @(
+        $root
+        $home
+        (Normalize-InstallDir $env:SystemRoot)
+        (Normalize-InstallDir $env:ProgramFiles)
+        (Normalize-InstallDir $programFilesX86)
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    return $unsafeDirs -notcontains $normalized
+}
+
+function Test-VitePlusInstallDir {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return $false
+    }
+
+    $binDir = Join-Path $Path "bin"
+    if (-not (Test-Path -LiteralPath $binDir -PathType Container)) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $Path "current"))) {
+        return $false
+    }
+
+    return (Test-Path -LiteralPath (Join-Path $binDir "vp.exe")) `
+        -or (Test-Path -LiteralPath (Join-Path $binDir "vp.cmd")) `
+        -or (Test-Path -LiteralPath (Join-Path $binDir "vp"))
+}
+
+function Get-PreviousInstallDir {
+    if (-not $env:VP_HOME) {
+        return $null
+    }
+
+    $vpCommand = Get-Command vp -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $vpCommand) {
+        return $null
+    }
+
+    $vpPath = $vpCommand.Path
+    if (-not $vpPath) {
+        return $null
+    }
+
+    $vpFileName = [System.IO.Path]::GetFileName($vpPath)
+    if ($vpFileName -notin @("vp", "vp.exe", "vp.cmd")) {
+        return $null
+    }
+
+    $oldDir = Normalize-InstallDir (Split-Path -Parent (Split-Path -Parent $vpPath))
+    $newDir = Normalize-InstallDir $InstallDir
+    if ($oldDir -eq $newDir) {
+        return $null
+    }
+    if (-not (Test-SafeInstallDirToRemove $oldDir)) {
+        return $null
+    }
+    if (-not (Test-VitePlusInstallDir $oldDir)) {
+        return $null
+    }
+
+    return $oldDir
+}
+
+function Test-NestedInstallDir {
+    param(
+        [string]$OldDir,
+        [string]$NewDir
+    )
+    if ([string]::IsNullOrWhiteSpace($OldDir) -or [string]::IsNullOrWhiteSpace($NewDir)) {
+        return $false
+    }
+
+    $oldDir = Normalize-InstallDir $OldDir
+    $newDir = Normalize-InstallDir $NewDir
+    if ([string]::IsNullOrWhiteSpace($oldDir) -or [string]::IsNullOrWhiteSpace($newDir) -or $oldDir -eq $newDir) {
+        return $false
+    }
+
+    # Normalize-InstallDir already trimmed trailing separators
+    $oldPrefix = $oldDir + [System.IO.Path]::DirectorySeparatorChar
+    $newPrefix = $newDir + [System.IO.Path]::DirectorySeparatorChar
+    return $oldPrefix.StartsWith($newPrefix, [System.StringComparison]::OrdinalIgnoreCase) `
+        -or $newPrefix.StartsWith($oldPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Prompt-RemovePreviousInstallDir {
+    param([string]$PreviousInstallDir)
+    if (-not $PreviousInstallDir) {
+        return
+    }
+    if ($env:CI -eq "true") {
+        return
+    }
+    if (-not [Environment]::UserInteractive) {
+        return
+    }
+
+    Write-Host ""
+    Write-Warn "Found a previous Vite+ install at $PreviousInstallDir."
+    Write-Host "The new VP_HOME is $InstallDir."
+    $response = Read-Host "Remove the previous install directory? (y/N)"
+    if ($response -match "^(?i:y|yes)$") {
+        $vpBin = Join-Path $PreviousInstallDir "current\bin\vp.exe"
+        if (-not (Test-Path -LiteralPath $vpBin)) {
+            Write-Warn "Could not remove previous Vite+ install at ${PreviousInstallDir}: vp binary not found."
+            return
+        }
+
+        $previousVpHome = $env:VP_HOME
+        try {
+            $env:VP_HOME = $PreviousInstallDir
+            $output = & $vpBin implode --yes 2>&1
+            $exitCode = $LASTEXITCODE
+        } catch {
+            $output = $_
+            $exitCode = 1
+        } finally {
+            $env:VP_HOME = $previousVpHome
+        }
+
+        if ($exitCode -eq 0) {
+            Write-Success "Removed previous Vite+ install at $PreviousInstallDir."
+        } else {
+            Write-Warn "Could not remove previous Vite+ install at ${PreviousInstallDir}: $output"
+        }
+    }
+}
+
+# Resolve a PR number or commit SHA to the registry bridge's immutable commit
+# version (0.0.0-commit.<sha>). A full commit SHA maps directly to the bridge's
+# deterministic version; a PR number (or short ref) is resolved via the bridge
+# download URL's `x-commit-key: <owner>:<repo>:<sha>` header (HEAD).
+function Resolve-BridgeCommitVersion {
+    param([string]$Ref)
+    $sha = $Ref
+    if ($Ref -notmatch '^[0-9a-fA-F]{40}$') {
+        try {
+            $resp = Invoke-WebRequest -Uri "$BridgeDownloadBase@$Ref" -Method Head -UseBasicParsing -ErrorAction Stop
+        } catch {
+            return $null
+        }
+        $commitKey = @($resp.Headers['x-commit-key'])[0]
+        if (-not $commitKey) { return $null }
+        $sha = ($commitKey -split ':')[-1]
+    }
+    if ($sha -notmatch '^[0-9a-fA-F]{40}$') { return $null }
+    return "0.0.0-commit.$sha"
+}
+
+function Write-InstallFailure {
+    param(
+        [string]$LogPath,
+        [int]$ExitCode = 0
+    )
+
+    if (Test-IsDllNotFoundExitCode $ExitCode) {
+        $message = Get-DllNotFoundInstallMessage
+        if ($env:CI -eq "true") {
+            Write-Host "error: " -ForegroundColor Red -NoNewline
+            Write-Host $message
+            Exit-Installer
+        }
+        Write-Error-Exit $message
+    }
+
+    if ($env:CI -eq "true") {
+        Write-Host "error: " -ForegroundColor Red -NoNewline
+        Write-Host "Failed to install dependencies. Log output:"
+        Get-Content -Path $LogPath | ForEach-Object { Write-Host $_ }
+        Exit-Installer
+    } else {
+        Write-Error-Exit "Failed to install dependencies. See log for details: $LogPath"
+    }
+}
+
+function Write-ReleaseAgeFailure {
+    param([string]$LogPath)
+    if ($env:CI -eq "true") {
+        Write-Host "error: " -ForegroundColor Red -NoNewline
+        Write-Host "Install blocked by your minimumReleaseAge setting. Log output:"
+        Get-Content -Path $LogPath | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Error-Exit "Install blocked by your minimumReleaseAge setting. Wait until the package is old enough or adjust your package manager configuration explicitly. See log for details: $LogPath"
+    }
 }
 
 function Get-Architecture {
@@ -68,6 +438,7 @@ function Get-PackageMetadata {
         try {
             $script:PackageMetadata = Invoke-RestMethod $metadataUrl
         } catch {
+            if (Test-IsInstallStopException $_) { throw }
             # Try to extract npm error message from response
             $errorMsg = $_.ErrorDetails.Message
             if ($errorMsg) {
@@ -77,6 +448,7 @@ function Get-PackageMetadata {
                         Write-Error-Exit "Failed to fetch version '${versionPath}': $($errorJson.error)`n  URL: $metadataUrl"
                     }
                 } catch {
+                    if (Test-IsInstallStopException $_) { throw }
                     # JSON parsing failed, fall through to generic error
                 }
             }
@@ -90,6 +462,7 @@ function Get-PackageMetadata {
             try {
                 $script:PackageMetadata = $script:PackageMetadata | ConvertFrom-Json
             } catch {
+                if (Test-IsInstallStopException $_) { throw }
                 # Not valid JSON - treat as plain string error
                 Write-Error-Exit "Failed to fetch version '${versionPath}': $script:PackageMetadata`n  URL: $metadataUrl"
             }
@@ -151,7 +524,7 @@ function Download-AndExtract {
 function Cleanup-OldVersions {
     param([string]$InstallDir)
 
-    $maxVersions = 5
+    $maxVersions = 3
     # Only cleanup semver format directories (0.1.0, 1.2.3-beta.1, etc.)
     # This excludes 'current' symlink and non-semver directories like 'local-dev'
     $semverPattern = '^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$'
@@ -170,6 +543,33 @@ function Cleanup-OldVersions {
     foreach ($old in $toDelete) {
         # Remove silently
         Remove-Item -Path $old.FullName -Recurse -Force
+    }
+}
+
+function Remove-CurrentLink {
+    param([string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return
+    }
+
+    $isReparsePoint = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+
+    try {
+        if ($isReparsePoint) {
+            if ($item.PSIsContainer) {
+                [System.IO.Directory]::Delete($item.FullName)
+            } else {
+                [System.IO.File]::Delete($item.FullName)
+            }
+            return
+        }
+
+        Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+    } catch {
+        Write-Error-Exit "Failed to remove existing current link at ${Path}: $_"
     }
 }
 
@@ -194,6 +594,73 @@ function Configure-UserPath {
     }
 }
 
+function Get-NushellVendorAutoloadDir {
+    $nushellCommand = Get-Command nu -ErrorAction SilentlyContinue
+    if ($null -eq $nushellCommand) {
+        return $null
+    }
+
+    try {
+        $dirsOutput = & $nushellCommand.Source -c '$nu.vendor-autoload-dirs | reverse | each {|dir| $dir } | str join (char nl)' 2>$null
+    } catch {
+        return $null
+    }
+
+    foreach ($dir in ($dirsOutput -split "\r?\n")) {
+        if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            return $dir
+        }
+    }
+
+    return $null
+}
+
+function Configure-Nushell {
+    $autoloadDir = Get-NushellVendorAutoloadDir
+    if ($null -eq $autoloadDir) {
+        if ($null -eq (Get-Command nu -ErrorAction SilentlyContinue)) {
+            return [pscustomobject]@{
+                Status = "skipped"
+                Message = "skipped (not installed)"
+            }
+        }
+
+        return [pscustomobject]@{
+            Status = "failed"
+            Message = "failed (could not determine vendor autoload dir)"
+        }
+    }
+
+    $autoloadFile = Join-Path $autoloadDir "vite-plus.nu"
+    $nuEnvRef= (Join-Path $InstallDir "env.nu") -replace [regex]::Escape($env:USERPROFILE), '~'
+    $content = "# Vite+ bin (https://viteplus.dev)`n" + ("source '"+ $nuEnvRef +"'") + "`n"
+
+    try {
+        New-Item -ItemType Directory -Force -Path $autoloadDir | Out-Null
+        if (Test-Path $autoloadFile) {
+            $existing = Get-Content -Path $autoloadFile -Raw
+            if ($existing -eq $content) {
+                return [pscustomobject]@{
+                    Status = "already"
+                    Message = "already configured $autoloadFile"
+                }
+            }
+        }
+
+        [System.IO.File]::WriteAllText($autoloadFile, $content)
+        return [pscustomobject]@{
+            Status = "true"
+            Message = "updated $autoloadFile"
+        }
+    } catch {
+        Write-Warn "Could not configure Nushell automatically."
+        return [pscustomobject]@{
+            Status = "failed"
+            Message = "failed $autoloadFile"
+        }
+    }
+}
+
 # Run vp env setup --refresh, showing output only on failure
 function Refresh-Shims {
     param([string]$BinDir)
@@ -204,7 +671,7 @@ function Refresh-Shims {
     }
 }
 
-# Setup Node.js version manager (node/npm/npx shims)
+# Setup Node.js version manager (node/npm/npx/corepack shims)
 # Returns: "true" = enabled, "false" = not enabled, "already" = already configured
 function Setup-NodeManager {
     param([string]$BinDir)
@@ -250,7 +717,7 @@ function Setup-NodeManager {
     if ($isInteractive) {
         Write-Host ""
         Write-Host "Would you like Vite+ to manage your Node.js versions?"
-        Write-Host "It adds ``node``, ``npm``, and ``npx`` shims to ~/.vite-plus/bin/ and automatically uses the right version."
+        Write-Host "It adds ``node``, ``npm``, ``npx``, and ``corepack`` shims to $NodeManagerBinDisplay and automatically uses the right version."
         Write-Host "Opt out anytime with ``vp env off``."
         $response = Read-Host "Press Enter to accept (Y/n)"
 
@@ -269,6 +736,15 @@ function Main {
     Write-Host "VITE+" -ForegroundColor Blue -NoNewline
     Write-Host "..."
 
+    if ($PrVersion -and $LocalTgz) {
+        Write-Error-Exit "VP_PR_VERSION and VP_LOCAL_TGZ cannot be used together"
+    }
+
+    $previousInstallDir = Get-PreviousInstallDir
+    if ($previousInstallDir -and (Test-NestedInstallDir -OldDir $previousInstallDir -NewDir $InstallDir)) {
+        Write-Error-Exit "Previous Vite+ install at $previousInstallDir overlaps with VP_HOME $InstallDir. Choose a separate VP_HOME or remove the previous install first."
+    }
+
     # Suppress progress bars for cleaner output
     $ProgressPreference = 'SilentlyContinue'
 
@@ -285,6 +761,17 @@ function Main {
         if ($ViteVersion -eq "latest" -or $ViteVersion -eq "test") {
             $ViteVersion = "local-dev"
         }
+    } elseif ($PrVersion) {
+        # Registry bridge mode: resolve the requested PR/SHA to the bridge's
+        # immutable commit version (0.0.0-commit.<sha>), the clearly-defined test
+        # version we install. The directory label stays non-semver so it keeps
+        # out of Cleanup-OldVersions and makes the PR build obvious in ~/.vite-plus.
+        $PrCommitVersion = Resolve-BridgeCommitVersion -Ref $PrVersion
+        if (-not $PrCommitVersion) {
+            Write-Error-Exit "Could not resolve a registry bridge build for $PrVersion"
+        }
+        $ViteVersion = "pkg-pr-new-$PrVersion"
+        Write-Info "Using registry bridge build: $PrCommitVersion"
     } else {
         # Fetch package metadata and resolve version from npm
         $ViteVersion = Get-VersionFromMetadata
@@ -316,10 +803,16 @@ function Main {
             Write-Error-Exit "VP_LOCAL_BINARY must be set when using VP_LOCAL_TGZ"
         }
     } else {
-        # Download from npm registry — extract only the vp binary from CLI platform package
+        # Download CLI platform tarball — npm registry or registry bridge (when PrVersion is set)
         $platformSuffix = Get-PlatformSuffix -Platform $platform
-        $packageName = "@voidzero-dev/vite-plus-cli-$platformSuffix"
-        $platformUrl = "$NpmRegistry/$packageName/-/vite-plus-cli-$platformSuffix-$ViteVersion.tgz"
+        if ($PrVersion) {
+            # The registry bridge redirects this URL to the platform tarball for
+            # the matching commit build (0.0.0-commit.<sha>).
+            $platformUrl = "$BridgeDownloadBase/@voidzero-dev/vite-plus-cli-$platformSuffix@$PrVersion"
+        } else {
+            $packageName = "@voidzero-dev/vite-plus-cli-$platformSuffix"
+            $platformUrl = "$NpmRegistry/$packageName/-/vite-plus-cli-$platformSuffix-$ViteVersion.tgz"
+        }
 
         $platformTempFile = New-TemporaryFile
         try {
@@ -357,20 +850,29 @@ function Main {
     # Generate wrapper package.json that declares vite-plus as a dependency.
     # pnpm will install vite-plus and all transitive deps via `vp install`.
     # The packageManager field pins pnpm to a known-good version.
+    # In PR mode, pin vite-plus to the bridge's clearly-defined commit version and
+    # resolve it (plus its platform binaries and transitive deps) through the
+    # bridge registry written to .npmrc below. The bridge rewrites a preview
+    # tarball's transitive deps to versions, not self-contained URLs, so a full
+    # install must go through the registry rather than the bare download URL.
+    $vitePlusSpec = if ($PrVersion) { $PrCommitVersion } else { $ViteVersion }
+    if ($PrVersion) {
+        # Bridge registry; drop any stale wrapper lockfile (see install.sh for why):
+        # the reused pkg-pr-new-<ref> dir must re-resolve a lockfile matching the
+        # spec we just wrote, not fail under CI's frozen-lockfile default.
+        Set-Content -Path (Join-Path $VersionDir ".npmrc") -Value "registry=$BridgeRegistry"
+        Remove-Item -Path (Join-Path $VersionDir "pnpm-lock.yaml") -ErrorAction SilentlyContinue
+    }
     $wrapperJson = @{
         name = "vp-global"
         version = $ViteVersion
         private = $true
         packageManager = "pnpm@10.33.0"
         dependencies = @{
-            "vite-plus" = $ViteVersion
+            "vite-plus" = $vitePlusSpec
         }
     } | ConvertTo-Json -Depth 10
     Set-Content -Path (Join-Path $VersionDir "package.json") -Value $wrapperJson
-
-    # Isolate from pnpm's global config that may block installing
-    # recently-published packages (e.g. minimumReleaseAge).
-    Set-Content -Path (Join-Path $VersionDir ".npmrc") -Value "minimum-release-age=0"
 
     # Install production dependencies (skip if VP_SKIP_DEPS_INSTALL is set,
     # e.g. during local dev where install-global-cli.ts handles deps separately)
@@ -380,12 +882,31 @@ function Main {
         try {
             # Use cmd /c so CI=true is scoped to the child process only,
             # avoiding leaking it into the user's shell session.
-            $output = cmd /c "set CI=true && `"$BinDir\vp.exe`" install --silent" 2>&1
+            # Do not pass --silent to the inner install: pnpm suppresses the
+            # release-age error body in silent mode, which would leave
+            # install.log empty and make the release-age gate impossible to
+            # detect. Output is already captured to install.log here.
+            $output = cmd /c "set CI=true && `"$BinDir\vp.exe`" install" 2>&1
             $installExitCode = $LASTEXITCODE
             $output | Out-File $installLog
             if ($installExitCode -ne 0) {
-                Write-Host "error: Failed to install dependencies. See log for details: $installLog" -ForegroundColor Red
-                exit 1
+                if (Test-ReleaseAgeError $installLog) {
+                    if (Confirm-ReleaseAgeOverride) {
+                        # Write the override only after explicit consent, then retry once.
+                        Write-ReleaseAgeOverride
+                        $retryOutput = cmd /c "set CI=true && `"$BinDir\vp.exe`" install" 2>&1
+                        $retryExitCode = $LASTEXITCODE
+                        $retryOutput | Out-File $installLog
+                        if ($retryExitCode -ne 0) {
+                            Write-InstallFailure -LogPath $installLog -ExitCode $retryExitCode
+                        }
+                    } else {
+                        Write-ReleaseAgeFailure $installLog
+                        Exit-Installer
+                    }
+                } else {
+                    Write-InstallFailure -LogPath $installLog -ExitCode $installExitCode
+                }
             }
         } finally {
             Pop-Location
@@ -393,11 +914,7 @@ function Main {
     }
 
     # Create/update current junction (symlink)
-    if (Test-Path $CurrentLink) {
-        # Remove existing junction
-        cmd /c rmdir "$CurrentLink" 2>$null
-        Remove-Item -Path $CurrentLink -Force -ErrorAction SilentlyContinue
-    }
+    Remove-CurrentLink $CurrentLink
     # Create new junction pointing to the version directory
     cmd /c mklink /J "$CurrentLink" "$VersionDir" | Out-Null
 
@@ -417,7 +934,7 @@ function Main {
         # Pre-trampoline versions: fall back to legacy .cmd and shell script wrappers.
         # Remove any stale trampoline .exe shims left by a newer install — .exe wins
         # over .cmd on Windows PATH, so leftover trampolines would bypass the wrappers.
-        foreach ($stale in @("vp.exe", "node.exe", "npm.exe", "npx.exe", "vpx.exe")) {
+        foreach ($stale in @("vp.exe", "node.exe", "npm.exe", "npx.exe", "corepack.exe", "vpx.exe", "vpr.exe")) {
             $stalePath = Join-Path "$InstallDir\bin" $stale
             if (Test-Path $stalePath) {
                 Remove-Item -Path $stalePath -Force -ErrorAction SilentlyContinue
@@ -445,11 +962,14 @@ exec "`$VP_HOME/current/bin/vp.exe" "`$@"
     # Cleanup old versions
     Cleanup-OldVersions -InstallDir $InstallDir
 
-    # Configure user PATH (always attempted)
-    $pathResult = Configure-UserPath
-
     # Setup Node.js version manager (shims) - separate component
     $nodeManagerResult = Setup-NodeManager -BinDir $BinDir
+
+    Prompt-RemovePreviousInstallDir -PreviousInstallDir $previousInstallDir
+
+    # Configure shell access after the install is otherwise complete.
+    $pathResult = Configure-UserPath
+    $nushellResult = Configure-Nushell
 
     # Use ~ shorthand if install dir is under USERPROFILE, otherwise show full path
     $displayDir = $InstallDir -replace [regex]::Escape($env:USERPROFILE), '~'
@@ -487,23 +1007,43 @@ exec "`$VP_HOME/current/bin/vp.exe" "`$@"
     Write-Host ""
     Write-Host "  Run ${BRIGHT_BLUE}vp help${NC} to see available commands."
 
-    # Show note if PATH was updated
-    if ($pathResult -eq "true") {
+    Write-Host ""
+    Write-Host "  Shell configuration:"
+    switch ($pathResult) {
+        "true" { Write-Host "    - Windows PATH: updated" }
+        "already" { Write-Host "    - Windows PATH: already configured" }
+        "failed" { Write-Host "    - Windows PATH: failed" }
+        default { Write-Host "    - Windows PATH: skipped" }
+    }
+    if ($nushellResult.Status -ne "skipped") {
+      Write-Host "    - Nushell: $($nushellResult.Message)"
+    }
+
+    # Show note if PATH or Nushell was updated
+    if ($pathResult -eq "true" -or $nushellResult.Status -eq "true") {
         Write-Host ""
         Write-Host "  Note: Restart your terminal and IDE for changes to take effect."
     }
 
-    # Show manual PATH instructions if PATH could not be configured
-    if ($pathResult -eq "failed") {
+    # Show manual PATH/Nushell instructions if anything still needs manual setup
+    if ($pathResult -eq "failed" -or $nushellResult.Status -eq "failed") {
         Write-Host ""
-        Write-Host "  ${YELLOW}note${NC}: Could not automatically add vp to your PATH."
+        Write-Host "  ${YELLOW}note${NC}: Some shells still need manual setup."
         Write-Host ""
         Write-Host "  vp was installed to: ${BOLD}${displayDir}\bin${NC}"
         Write-Host ""
-        Write-Host "  To use vp, manually add it to your PATH:"
-        Write-Host ""
-        Write-Host "    [Environment]::SetEnvironmentVariable('Path', '$InstallDir\bin;' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')"
-        Write-Host ""
+        if ($pathResult -eq "failed") {
+            Write-Host "  To use vp in Powershell/cmd, manually add it to your PATH:"
+            Write-Host ""
+            Write-Host "    [Environment]::SetEnvironmentVariable('Path', '$InstallDir\bin;' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')"
+            Write-Host ""
+        }
+        if ($nushellResult.Status -eq "failed") {
+            Write-Host "  To use vp in Nushell, create a vite-plus.nu file in your preferred vendor autoload directory with:"
+            Write-Host ""
+            Write-Host "    source '$displayDir\env.nu'"
+            Write-Host ""
+        }
         Write-Host "  Or run vp directly:"
         Write-Host ""
         Write-Host "    & `"$InstallDir\bin\vp.exe`""
@@ -512,4 +1052,14 @@ exec "`$VP_HOME/current/bin/vp.exe" "`$@"
     Write-Host ""
 }
 
-Main
+try {
+    Main
+} catch {
+    if (Test-IsInstallStopException $_) {
+        if (Test-ShouldKeepShellOpenAfterFailure) {
+            return
+        }
+        exit $global:LASTEXITCODE
+    }
+    throw
+}

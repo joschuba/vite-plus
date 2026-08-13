@@ -12,21 +12,25 @@ jobs:
     if: github.event.repository.fork == false
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
       actions: read
       id-token: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
       - uses: ./.github/actions/clone
 
-      - uses: oxc-project/setup-rust@23f38cfb0c04af97a055f76acee94d5be71c7c82 # v1.0.16
+      - name: Set up metadata directory
+        run: echo "UPGRADE_DEPS_META_DIR=${RUNNER_TEMP}/upgrade-deps-meta" >> "$GITHUB_ENV"
+
+      - uses: oxc-project/setup-rust@68c3199c5339f965e6e163924c3c450773eba42b # main (pending v1.0.17 — Swatinem/rust-cache v2.9.1 for node24)
         with:
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: upgrade-deps
           tools: just,cargo-shear
 
-      - uses: oxc-project/setup-node@4c26e7cb3605b6bdef5450dacd02c434b10fd8ba # v1.2.0
+      - uses: oxc-project/setup-node@4c588e9266bd930b6ddc34307df0659ed511d187 # v1.3.1
+
+      - name: Capture current upstream CLI help
+        run: node .github/scripts/cli-help-diff.ts capture --output "${UPGRADE_DEPS_META_DIR}/cli-help-before.json"
 
       - name: Rustup Adds Target
         run: rustup target add x86_64-unknown-linux-gnu
@@ -39,7 +43,7 @@ jobs:
         id: upgrade
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node .github/scripts/upgrade-deps.mjs
+        run: node .github/scripts/upgrade-deps.ts
 
       - name: Sync remote and build
         id: build
@@ -59,48 +63,147 @@ jobs:
         env:
           RELEASE_BUILD: 'true'
 
-      - uses: anthropics/claude-code-action@eb99fb38f09dedf69f423f1315d6c0272ace56a0 # Claude Code to 2.1.72
+      - name: Generate upstream CLI help diff report
+        id: cli-help-diff
+        run: |
+          node .github/scripts/cli-help-diff.ts capture \
+            --versions "${UPGRADE_DEPS_META_DIR}/versions.json" \
+            --output "${UPGRADE_DEPS_META_DIR}/cli-help-after.json"
+          node .github/scripts/cli-help-diff.ts report \
+            --before "${UPGRADE_DEPS_META_DIR}/cli-help-before.json" \
+            --after "${UPGRADE_DEPS_META_DIR}/cli-help-after.json" \
+            --output "${UPGRADE_DEPS_META_DIR}/cli-help-report.md" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Check upgrade dependencies
+        id: check-upgrade-dependencies
+        timeout-minutes: 180
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1.0.165
         env:
+          CLI_HELP_DIFF_CHANGED: ${{ steps.cli-help-diff.outputs.has-changes }}
+          CLI_HELP_DIFF_REPORT: ${{ env.UPGRADE_DEPS_META_DIR }}/cli-help-report.md
           RELEASE_BUILD: 'true'
         with:
           claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: 'true'
           prompt: |
-            Check if the build-upstream steps failed and fix them.
+            Your goal: after the daily upstream-dependency upgrade, bring the project back
+            to a fully green state. The upgrade script has bumped every dep to the latest
+            version, the `Sync remote and build` step has attempted to merge the rolldown
+            and vite catalogs into the workspace, and the `build-upstream` action has
+            attempted a build — your job is to diagnose and fix every error that surfaced,
+            then prove the fix is complete by running a final validation pass.
+
             ### Background
-            - The build-upstream steps are at ./.github/actions/build-upstream/action.yml
-            - The deps upgrade script is at ./.github/scripts/upgrade-deps.mjs
+            - Upgrade script: `./.github/scripts/upgrade-deps.ts`
+            - Sync-remote tool: `pnpm tool sync-remote` (source in
+              `packages/tools/src/sync-remote-deps.ts`) — clones rolldown/vite into the
+              working tree, merges their pnpm-workspace catalogs into the root
+              `pnpm-workspace.yaml`, and syncs the root `Cargo.toml` oxc crate
+              versions to match `rolldown/Cargo.toml`.
+            - Build-upstream action: `./.github/actions/build-upstream/action.yml`
+            - Package manager: `pnpm`. Do NOT downgrade any dep — we want the latest.
 
-            ### Instructions
-            - We are using `pnpm` as the package manager
-            - We are aiming to upgrade all dependencies to the latest versions in this workflow, so don't downgrade any dependencies.
-            - Compare tsdown CLI options with `vp pack` and sync any new or removed options. Follow the instructions in `.claude/skills/sync-tsdown-cli/SKILL.md`.
-            - Check `.claude/agents/cargo-workspace-merger.md` if rolldown hash is changed.
-            - Run the steps in `build-upstream` action.yml after your fixing. If no errors are found, you can safe to exit.
-            - Install global CLI after the build-upstream steps are successful, by running the following commands:
-              - `pnpm bootstrap-cli:ci`
-              - `echo "$HOME/.vite-plus/bin" >> $GITHUB_PATH`
-            - Run `pnpm run lint` to check if there are any issues after the build, if has, deep investigate it and fix it. You need to run `just build` before you can run `pnpm run lint`.
-            - Run `pnpm run test` after `just build` to ensure all tests are successful.
-            - The snapshot tests in `pnpm run test` are always successful, you need to check the snapshot diffs in git to see if there is anything wrong after our deps upgrade.
-            - If deps in our `Cargo.toml` need to be upgraded, you can refer to the `./.claude/agents/cargo-workspace-merger.md`
-              - If `Cargo.toml` has been modified, you need to run `cargo shear` to ensure there is nothing wrong with our dependencies.
-              - Run `cargo check --all-targets --all-features` to ensure everything works fine if any Rust related codes are modified.
-            - Run the following commands to ensure everything works fine:
-              vp -h
-              vp run -h
-              vp lint -h
-              vp test -h
-              vp build -h
-              vp fmt -h
-              vp pack -h
-            - Your final step is to run `just build` to ensure all builds are successful.
+            ### Outcomes from earlier steps (both ran with continue-on-error)
+            - Sync remote and build: ${{ steps.build.outcome }}
+            - build-upstream action: ${{ steps.build-upstream.outcome }}
 
-            Help me fix the errors in `build-upstream` steps if exists.
-            No need to commit changes after your fixing we have a following step to commit all file changes.
+            ### Fixups to perform (in order)
+            1. If the `Sync remote and build` outcome above is `failure`, fix it FIRST —
+               nothing else will work until the merged workspace is correct. Re-run
+               `pnpm tool sync-remote` and read the error. The most common cause is a
+               cross-major semver conflict in the merged catalog, e.g.
+               `Incompatible semver ranges for <pkg>: ^X vs ^Y`. The merger refuses to
+               auto-resolve cross-major conflicts for packages outside its synced list
+               (oxc-*, vitest deps). For passthrough deps that vp does NOT import
+               directly (e.g. `diff`, `acorn`, `astring`, anything only present in
+               `rolldown/scripts/package.json` or vite's internals), bump vp's
+               `pnpm-workspace.yaml` catalog entry to match the rolldown/vite version,
+               then re-run `pnpm tool sync-remote` until it exits 0. Finish with
+               `pnpm install --no-frozen-lockfile`.
+            2. Re-run the steps in `./.github/actions/build-upstream/action.yml`; fix any
+               non-zero exits. If the Rust build fails inside a vendored `rolldown`
+               crate with an oxc API mismatch (e.g. `oxc_ast::template_element` taking
+               a different number of arguments, or any `oxc_*` type/signature error),
+               the root `Cargo.toml` oxc pins are out of sync with the bumped rolldown.
+               `pnpm tool sync-remote` should already reconcile them; if any `oxc_*`
+               entry in the root `Cargo.toml [workspace.dependencies]` still differs
+               from `rolldown/Cargo.toml`, bump it to match (the oxc same-version
+               family follows rolldown's umbrella `oxc` version), run `cargo update`,
+               and rebuild.
+            3. If the rolldown hash changed, follow `.claude/agents/cargo-workspace-merger.md`
+               to resync the workspace.
+            4. If `CLI_HELP_DIFF_CHANGED` is `true`, read the upstream help diff at
+               `$CLI_HELP_DIFF_REPORT`, then follow
+               `.claude/skills/sync-upstream-cli-help/SKILL.md` to update the mirrored
+               help documents. If it is `false`, do not modify help documents.
+            5. Compare tsdown CLI options with `vp pack` and sync new/removed options per
+               `.claude/skills/sync-tsdown-cli/SKILL.md`.
+            6. Follow `.claude/skills/sync-upstream-dependency-docs/SKILL.md` to
+               update version-specific documentation for dependencies changed in this run.
+            7. Install the global CLI:
+               - `pnpm bootstrap-cli:ci`
+               - `echo "$HOME/.vite-plus/bin" >> $GITHUB_PATH`
+            8. If any Rust code or `Cargo.toml` was modified, run `cargo check
+               --all-targets --all-features` and `cargo shear`; fix anything they report.
+            9. Run `pnpm run lint` (requires a prior `just build`); fix any errors.
+            10. Smoke-test the CLI: `vp -h`, `vp run -h`, `vp lint -h`, `vp test -h`,
+               `vp build -h`, `vp fmt -h`, `vp pack -h`.
+
+            ### Generated artifacts and build diffs
+            Several build outputs are committed release artifacts. In particular,
+            `packages/cli/binding/index.cjs` and `packages/cli/binding/index.d.cts`
+            are regenerated by the NAPI build and CI requires them to match the
+            current Rust binding API after `build-upstream`.
+
+            After every `build-upstream` or `just build` run, inspect `git status
+            --short` and focused diffs for generated files. Do NOT discard generated
+            binding diffs just because they are generated. If an upstream dependency
+            changes the generated declarations or loader, keep the generated file
+            updates in the PR. If the diff is accidental, stale, or caused by an
+            incorrect source-level fix, fix the source and regenerate until the diff
+            is either gone or intentionally kept.
+
+            ### Final validation (this step is complete ONLY when all pass)
+            1. `just build` exits 0.
+            2. `pnpm bootstrap-cli:ci && pnpm test:unit` exits 0.
+            3. `just snapshot-test` exits 0. Snapshot mismatches fail the run with a
+               unified diff. Re-record with `UPDATE_SNAPSHOTS=1` only for cosmetic
+               drift from the upgrade (e.g. a bumped version string in help output);
+               unexpected stack traces, missing output, or diverging CLI behavior are
+               regressions to fix.
+            4. `git status --short` and `git diff --stat` have been inspected, and
+               every changed file is intentional for the upgrade PR. Pay special
+               attention to generated NAPI binding files, because later CI runs fail
+               if a build produces uncommitted binding output changes.
+
+            If any of the four above fails, diagnose the root cause, fix it, and re-run
+            the final validation. Do not exit with the task marked complete otherwise.
+
+            ### Running long commands (IMPORTANT)
+            Run every long-running command (`just build`, `pnpm bootstrap-cli:ci`,
+            `pnpm test:unit`, `cargo check`, etc.) in the FOREGROUND — a single Bash tool call
+            that blocks until the command exits. The Bash tool already gives you a 10-minute
+            timeout per call, which is enough for these builds.
+
+            Do NOT do any of the following:
+            - Spawn a background process (`&`, `nohup`, `disown`, `setsid`, `screen`, `tmux`).
+            - Poll for process completion with `ps`, `pgrep`, `lsof`, `sleep` loops, or
+              repeated `ls` checks on build artifacts. Each polling Bash call costs a full
+              model round-trip and burns minutes without progress.
+            - "Monitor" a running build from a separate Bash call. If you want to know
+              whether a build succeeded, just run it in the foreground and read its exit
+              code and stdout/stderr in the single tool result.
+
+            If a foreground command legitimately hits the 10-minute Bash timeout, report
+            that and stop — do not start polling.
+
+            ### Commit rule
+            Do NOT run `git commit` or `git push`. A later workflow step commits every
+            modified file for you.
           claude_args: |
-            --model opus --allowedTools "Bash,Edit,Replace,NotebookEditCell"
+            --model opus --max-turns 400 --allowedTools "Bash,Edit,Replace,NotebookEditCell"
           additional_permissions: |
             actions: read
 
@@ -109,17 +212,124 @@ jobs:
           pnpm install --no-frozen-lockfile
           pnpm dedupe
 
-      - name: Checkout binding files
-        run: |
-          git checkout packages/cli/binding/index.cjs
-          git checkout packages/cli/binding/index.d.cts
-
       - name: Format code
+        # `pnpm fmt` runs `vp fmt`, which loads the freshly built NAPI binding. When
+        # `build-upstream` fails (e.g. an upstream rolldown/oxc desync the in-workflow
+        # fixup could not resolve) the binding is never produced and `vp fmt` aborts.
+        # Keep going so the PR is still created with the broken state surfaced for review,
+        # matching the `continue-on-error` on the build steps above.
+        continue-on-error: true
         run: pnpm fmt
+
+      - name: Enhance PR description with Claude
+        id: enhance-pr-description
+        continue-on-error: true
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1.0.165
+        with:
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: 'true'
+          prompt: |
+            Your task is to generate an accurate commit message and PR description for this
+            automated upstream-dependency upgrade PR. All output must be written in English.
+
+            ### Inputs
+            - Version changes (old -> new) in JSON: `${{ env.UPGRADE_DEPS_META_DIR }}/versions.json`
+            - Baseline commit message: `${{ env.UPGRADE_DEPS_META_DIR }}/commit-message.txt`
+            - Baseline PR body: `${{ env.UPGRADE_DEPS_META_DIR }}/pr-body.md`
+            - The working directory is the project root; all upgraded files are staged or modified.
+              Use `git status` and `git diff` (including `git diff --stat` and focused per-file diffs)
+              to discover what actually changed beyond the raw version bumps.
+
+            ### Build outcomes from earlier steps
+            - Sync remote and build: ${{ steps.build.outcome }}
+            - build-upstream action: ${{ steps.build-upstream.outcome }}
+
+            ### Output files to OVERWRITE (these live outside the repo and will NOT be committed)
+            - `${{ env.UPGRADE_DEPS_META_DIR }}/commit-message.txt`
+            - `${{ env.UPGRADE_DEPS_META_DIR }}/pr-body.md`
+
+            ### Commit message format
+            - First line (title, <= 72 chars): `feat(deps): upgrade upstream dependencies`
+            - Blank line.
+            - A concise bulleted list of notable version changes, one bullet per package.
+              For `rolldown` and `vite`, include the tag name plus short SHA when available
+              (e.g. `rolldown: <old-short> -> v1.2.3 (<new-short>)`). Skip packages whose
+              old and new values are equal.
+            - If non-version code changes were required (e.g., tsdown CLI option sync,
+              rolldown workspace re-merge, snapshot updates, cargo shear cleanup),
+              add a trailing `Code changes:` block listing each change with a file path.
+
+            ### PR body format (Markdown)
+            Use these sections in order:
+            1. `## Summary` — 2-4 bullets describing what this PR does at a high level,
+               naming the most impactful upgrades (e.g., rolldown tag bump, vite bump,
+               vitest/tsdown bumps) and any required code adjustments.
+            2. `## Dependency updates` — a Markdown table with columns `Package | From | To`.
+               Use short 7-char SHAs for rolldown/vite hashes, and include the tag in the `To`
+               column when available. Omit packages whose old and new values are equal.
+            3. `## Code changes` — bullet list of the actual non-version edits, each naming
+               the file(s) touched. If the only changes are version bumps + lockfile + generated
+               bindings, write `- None beyond version bumps, lockfile, and formatter output.`.
+            4. `## Build status` — bullet list:
+               - `sync-remote-and-build`: ${{ steps.build.outcome }}
+               - `build-upstream`: ${{ steps.build-upstream.outcome }}
+
+            ### Rules
+            - Be factual. Only describe changes that are actually present in `git diff`. Do not
+              invent feature descriptions or behavior changes.
+            - Keep the tone terse and mechanical — this is an automated upgrade PR, not a
+              feature announcement.
+            - Do NOT run `git commit`, `git push`, or create any PR comment; simply write the
+              two output files. A later workflow step will consume them.
+            - Do NOT modify any file inside the repository working tree.
+          claude_args: |
+            --model opus --allowedTools "Bash,Read,Write,Edit"
+          additional_permissions: |
+            actions: read
+
+      - name: Read generated PR content
+        id: pr-content
+        run: |
+          set -euo pipefail
+          COMMIT_FILE="${UPGRADE_DEPS_META_DIR}/commit-message.txt"
+          BODY_FILE="${UPGRADE_DEPS_META_DIR}/pr-body.md"
+
+          # GitHub Actions heredoc outputs require the terminator on its own line,
+          # so guarantee a trailing newline regardless of what the generator wrote.
+          ensure_trailing_newline() {
+            local f="$1"
+            if [ -n "$(tail -c1 "$f")" ]; then
+              printf '\n' >> "$f"
+            fi
+          }
+          ensure_trailing_newline "${COMMIT_FILE}"
+          ensure_trailing_newline "${BODY_FILE}"
+
+          echo '--- commit-message.txt ---'
+          cat "${COMMIT_FILE}"
+          echo '--- pr-body.md ---'
+          cat "${BODY_FILE}"
+          echo '---'
+
+          {
+            echo 'commit-message<<UPGRADE_DEPS_COMMIT_EOF'
+            cat "${COMMIT_FILE}"
+            echo 'UPGRADE_DEPS_COMMIT_EOF'
+            echo 'body<<UPGRADE_DEPS_BODY_EOF'
+            cat "${BODY_FILE}"
+            echo 'UPGRADE_DEPS_BODY_EOF'
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Close and delete previous PR
         env:
-          GH_TOKEN: ${{ secrets.AUTO_UPDATE_BRANCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # Find PR with the deps/upstream-update branch
           PR_NUMBER=$(gh pr list --head deps/upstream-update --json number --jq '.[0].number')
@@ -132,20 +342,20 @@ jobs:
           fi
 
       - name: Create/Update PR
-        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        id: create-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           base: main
           branch: deps/upstream-update
           title: 'feat(deps): upgrade upstream dependencies'
           sign-commits: true
-          token: ${{ secrets.AUTO_UPDATE_BRANCH_TOKEN }}
-          branch-token: ${{ secrets.GITHUB_TOKEN }}
-          body: |
-            Automated daily upgrade of upstream dependencies:
-            - rolldown (latest tag)
-            - vite (latest tag)
-            - vitest (latest npm version)
-            - tsdown (latest npm version)
+          token: ${{ steps.app-token.outputs.token }}
+          body: ${{ steps.pr-content.outputs.body }}
+          commit-message: ${{ steps.pr-content.outputs.commit-message }}
 
-            Build status: ${{ steps.build.outcome }}
-          commit-message: 'feat(deps): upgrade upstream dependencies'
+      - name: Comment upstream CLI help diff
+        if: steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+        run: gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${UPGRADE_DEPS_META_DIR}/cli-help-report.md"

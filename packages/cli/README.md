@@ -3,7 +3,7 @@
 **The Unified Toolchain for the Web**
 _runtime and package management, create, dev, check, test, build, pack, and monorepo task caching in a single dependency_
 
-This package provides the project-local version of Vite+. The global `vite` command automatically delegates to this package for all project-specific tasks.
+This package provides the project-local version of Vite+. The global `vp` command automatically delegates to this package for all project-specific tasks.
 
 ---
 
@@ -15,9 +15,10 @@ Vite+ is the unified entry point for local web development. It combines [Vite](h
 - **`vp check`:** Run formatting, linting, and type checks in one command
 - **`vp test`:** Run tests through bundled Vitest
 - **`vp build`:** Build applications for production with Vite + Rolldown
-- **`vp run`:** Execute monorepo tasks with caching and dependency-aware scheduling
+- **`vp run`:** Run `package.json` scripts and monorepo tasks with caching and dependency-aware scheduling
 - **`vp pack`:** Build libraries for npm publishing or standalone app binaries
 - **`vp release`:** Version and publish workspace packages with native publish preflight during `--dry-run`, release checks before real publishes by default, retry-friendly exact version overrides via `--version`, optional changelog generation via `--changelog`, prerelease channels like `--preid alpha` / `beta` / `rc`, and `--projects` order respected between independent packages
+- **`vp toolchain`:** Show the versions of Vite+, Vite, Rolldown, Oxc, and other tools
 - **`vp create` / `vp migrate`:** Scaffold new projects and migrate existing ones
 
 All of this is configured from your project root and works across Vite's framework ecosystem.
@@ -116,6 +117,7 @@ Use `vp migrate` to migrate to Vite+. It merges tool-specific config files such 
 
 - **run** - Run monorepo tasks
 - **exec** - Execute a command from local `node_modules/.bin`
+- **node** - Run a Node.js script with the resolved Vite+ environment
 - **dlx** - Execute a package binary without installing it as a dependency
 - **cache** - Manage the task cache
 
@@ -128,7 +130,7 @@ Use `vp migrate` to migrate to Vite+. It merges tool-specific config files such 
 
 #### Manage Dependencies
 
-Vite+ automatically wraps your package manager (pnpm, npm, or Yarn) based on `packageManager` and lockfiles:
+Vite+ automatically wraps your package manager (pnpm, npm, Yarn, or Bun) based on `packageManager` and lockfiles:
 
 - **add** - Add packages to dependencies
 - **remove** (`rm`, `un`, `uninstall`) - Remove packages from dependencies
@@ -139,10 +141,12 @@ Vite+ automatically wraps your package manager (pnpm, npm, or Yarn) based on `pa
 - **why** (`explain`) - Show why a package is installed
 - **info** (`view`, `show`) - View package metadata from the registry
 - **link** (`ln`) / **unlink** - Manage local package links
+- **rebuild** - Rebuild native modules
 - **pm** - Forward a command to the package manager
 
 #### Maintain
 
+- **toolchain** - Show Vite+ tool versions and their relationships
 - **upgrade** - Update `vp` itself to the latest version
 - **implode** - Remove `vp` and all related data
 
@@ -155,6 +159,16 @@ vp create
 ```
 
 You can run `vp create` inside of a project to add new apps or libraries to your project.
+
+Organizations can expose a curated set of templates under their npm scope by
+publishing `@org/create` with a `createConfig.templates` manifest in its `package.json`.
+Once published, `vp create @org` opens an interactive picker over those
+templates, and setting `create: { defaultTemplate: '@org' }` in
+`vite.config.ts` makes it the default for bare `vp create`. See the
+[Organization Templates guide](https://viteplus.dev/guide/create#organization-templates)
+for the authoring workflow and
+[`create.defaultTemplate`](https://viteplus.dev/config/create) for the
+config reference.
 
 ### Migrating an existing project
 
@@ -169,26 +183,30 @@ vp migrate
 Use the official [`setup-vp`](https://github.com/voidzero-dev/setup-vp) action to install Vite+ in GitHub Actions:
 
 ```yaml
-- uses: voidzero-dev/setup-vp@v1
+- uses: voidzero-dev/setup-vp@<setup-vp-version>
   with:
     node-version: '22'
     cache: true
 ```
+
+Set `<setup-vp-version>` to an exact version from the [`setup-vp` releases page](https://github.com/voidzero-dev/setup-vp/releases). You can use a commit SHA instead. Do not use the `v1` tag. The `v1` tag no longer receives updates.
+
+See [Automatic Version Updates](https://viteplus.dev/guide/ci#automatic-version-updates) to configure Dependabot or Renovate.
 
 #### Manual Installation & Migration
 
 If you are manually migrating a project to Vite+, install these dev dependencies first:
 
 ```bash
-npm install -D vite-plus @voidzero-dev/vite-plus-core@latest
+vp install -D vite-plus
 ```
 
-You need to add overrides to your package manager for `vite` and `vitest` so that other packages depending on Vite and Vitest will use the Vite+ versions:
+Add package-manager overrides so that other packages use the Vite+ versions. Alias `vite` to `@voidzero-dev/vite-plus-core`. Pin `vitest` to the version from `vp toolchain vitest`. The project and `vp test` then use the same Vitest copy. Without the pin, a dependency or workspace package can install a different Vitest version. The two versions can use separate mocks, `expect` functions, and runner states:
 
 ```json
 "overrides": {
   "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-  "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  "vitest": "4.1.10"
 }
 ```
 
@@ -197,7 +215,7 @@ If you are using `pnpm`, add this to your `pnpm-workspace.yaml`:
 ```yaml
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@latest
-  vitest: npm:@voidzero-dev/vite-plus-test@latest
+  vitest: 4.1.10
 ```
 
 Or, if you are using Yarn:
@@ -205,10 +223,10 @@ Or, if you are using Yarn:
 ```json
 "resolutions": {
   "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-  "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+  "vitest": "4.1.10"
 }
 ```
 
 ## Sponsors
 
-Thanks to [namespace.so](https://namespace.so) for powering our CI/CD pipelines with fast, free macOS and Linux runners.
+Thanks to [namespace.so](https://namespace.so) for powering our CI/CD pipelines with fast, free macOS, Linux, and Windows runners.

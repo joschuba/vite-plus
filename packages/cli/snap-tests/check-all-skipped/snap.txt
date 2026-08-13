@@ -1,4 +1,0 @@
-[1]> vp check --no-fmt --no-lint
-error: No checks enabled
-
-`vp check` did not run because both `--no-fmt` and `--no-lint` were set

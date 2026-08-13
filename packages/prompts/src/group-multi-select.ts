@@ -27,6 +27,7 @@ export const groupMultiselect = <Value>(opts: GroupMultiSelectOptions<Value>) =>
   const { selectableGroups = true, groupSpacing = 0 } = opts;
   const hasGuide = opts.withGuide ?? false;
   const nestedPrefix = '  ';
+  // eslint-disable-next-line unicorn/consistent-function-scoping -- kept inline for readability
   const withMarkerAndPrefix = (
     marker: string,
     prefix: string,
@@ -143,6 +144,7 @@ export const groupMultiselect = <Value>(opts: GroupMultiSelectOptions<Value>) =>
           ),
         )}`;
       }
+      return undefined;
     },
     render() {
       const title = `${hasGuide ? `${color.gray(S_BAR)}\n` : ''}${symbol(this.state)} ${opts.message}\n`;

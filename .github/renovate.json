@@ -1,27 +1,49 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>Boshen/renovate"],
-  "ignorePaths": [
-    "packages/cli/snap-tests/**",
-    "packages/cli/snap-tests-global/**",
-    "packages/cli/snap-tests-todo/**",
-    "bench/fixtures/**",
-    "rolldown/**",
-    "vite/**"
-  ],
+  "description": "Skip lockfile artifact updates (npm and cargo): they fail in Renovate's clone because vite/ and rolldown/ are gitignored. The renovate-lockfiles workflow regenerates lockfiles on renovate/** pushes; gitIgnoredAuthors keeps Renovate managing branches with its commits.",
+  "gitIgnoredAuthors": ["278573678+voidzero-guard[bot]@users.noreply.github.com"],
+  "skipArtifactsUpdate": true,
+  "ignorePaths": ["bench/fixtures/**", "rolldown/**", "vite/**"],
   "packageRules": [
     {
-      "matchPackageNames": ["vitest-dev"],
+      "description": "Ignore upstream toolchain npm packages (vendored via sync-remote or bumped by the proactive catalog workflow); everything else stays enabled so security alerts get fixed.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "rolldown",
+        "/^oxc-.*/",
+        "@oxc-node/*",
+        "@oxc-project/*",
+        "@tsdown/css",
+        "@tsdown/exe",
+        "@vitejs/devtools",
+        "lightningcss",
+        "oxfmt",
+        "oxlint",
+        "oxlint-tsgolint",
+        "tsdown",
+        "vite",
+        "vitest",
+        "vitest-dev"
+      ],
       "enabled": false
     },
     {
+      "description": "Ignore oxc crate updates (bumped by the proactive catalog workflow); other cargo crates stay enabled.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["/^oxc([_-].*)?$/"],
+      "enabled": false
+    },
+    {
+      "description": "Ignore vite-task git dependency digest updates (bumped via the bump-vite-task workflow).",
       "matchDepNames": [
         "fspy",
-        "vite_glob",
-        "vite_path",
-        "vite_str",
-        "vite_task",
-        "vite_workspace"
+        "vt_glob",
+        "vt_path",
+        "vt_powershell",
+        "vt_str",
+        "vt",
+        "vt_workspace"
       ],
       "enabled": false
     }

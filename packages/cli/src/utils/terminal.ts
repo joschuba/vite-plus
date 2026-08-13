@@ -1,8 +1,23 @@
 import { styleText } from 'node:util';
 
+import { shouldPrintVitePlusHeader, vitePlusHeader } from '../../binding/index.js';
+
 export function log(message: string) {
   /* oxlint-disable-next-line no-console */
   console.log(message);
+}
+
+/**
+ * Emit the Vite+ banner (header line + trailing blank line) to stdout.
+ * Gating (non-TTY, git hooks) lives in `shouldPrintVitePlusHeader` on the
+ * Rust side so both CLIs stay in sync.
+ */
+export function printHeader() {
+  if (!shouldPrintVitePlusHeader()) {
+    return;
+  }
+  log(vitePlusHeader());
+  log('');
 }
 
 export function accent(text: string) {
@@ -21,13 +36,19 @@ export function error(text: string) {
   return styleText('red', text);
 }
 
-// Standard message prefix functions matching the Rust CLI convention.
-// info/note go to stdout (normal output), warn/error go to stderr (diagnostics).
-
-export function infoMsg(msg: string) {
-  /* oxlint-disable-next-line no-console */
-  console.log(styleText(['blue', 'bold'], 'info:'), msg);
+export function formatDuration(durationMs: number) {
+  if (durationMs < 1000) {
+    return `${Math.max(1, durationMs)}ms`;
+  }
+  const durationSeconds = durationMs / 1000;
+  if (durationSeconds < 10) {
+    return `${durationSeconds.toFixed(1)}s`;
+  }
+  return `${Math.round(durationSeconds)}s`;
 }
+
+// Standard message prefix functions matching the Rust CLI convention.
+// warn/error go to stderr (diagnostics).
 
 export function warnMsg(msg: string) {
   /* oxlint-disable-next-line no-console */
@@ -37,9 +58,4 @@ export function warnMsg(msg: string) {
 export function errorMsg(msg: string) {
   /* oxlint-disable-next-line no-console */
   console.error(styleText(['red', 'bold'], 'error:'), msg);
-}
-
-export function noteMsg(msg: string) {
-  /* oxlint-disable-next-line no-console */
-  console.log(styleText(['gray', 'bold'], 'note:'), msg);
 }

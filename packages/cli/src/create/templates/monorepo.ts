@@ -3,15 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as prompts from '@voidzero-dev/vite-plus-prompts';
-import spawn from 'cross-spawn';
 
 import { rewriteMonorepoProject } from '../../migration/migrator.ts';
 import { PackageManager, type WorkspaceInfo } from '../../types/index.ts';
 import { editJsonFile } from '../../utils/json.ts';
+import { getScopeFromPackageName } from '../../utils/package.ts';
 import { templatesDir } from '../../utils/path.ts';
-import type { ExecutionResult } from '../command.ts';
+import { editYamlFile, readYamlFile } from '../../utils/yaml.ts';
+import type { ExecutionWithProjectDir } from '../command.ts';
 import { discoverTemplate } from '../discovery.ts';
-import { copyDir, formatDisplayTargetDir, setPackageName } from '../utils.ts';
+import { copyDir, formatDisplayTargetDir, renameFiles, setPackageName } from '../utils.ts';
 import { runRemoteTemplateCommand } from './remote.ts';
 import { type BuiltinTemplateInfo, LibraryTemplateRepo } from './types.ts';
 
@@ -21,33 +22,13 @@ export const InitialMonorepoAppDir = 'apps/website';
 export async function executeMonorepoTemplate(
   workspaceInfo: WorkspaceInfo,
   templateInfo: BuiltinTemplateInfo,
-  interactive: boolean,
   options?: { silent?: boolean },
-): Promise<ExecutionResult> {
+): Promise<ExecutionWithProjectDir> {
   assert(templateInfo.packageName, 'packageName is required');
   assert(templateInfo.targetDir, 'targetDir is required');
 
   workspaceInfo.monorepoScope = getScopeFromPackageName(templateInfo.packageName);
   const fullPath = path.join(workspaceInfo.rootDir, templateInfo.targetDir);
-
-  // Ask user to init git repository before creation starts.
-  let initGit = true; // Default to yes
-  if (interactive && !options?.silent) {
-    const selected = await prompts.confirm({
-      message: `Initialize git repository:`,
-      initialValue: true,
-    });
-    if (prompts.isCancel(selected)) {
-      prompts.log.info('Operation cancelled. Skipping git initialization');
-      initGit = false;
-    } else {
-      initGit = selected;
-    }
-  } else {
-    if (!options?.silent) {
-      prompts.log.info(`Initializing git repository (default: yes)`);
-    }
-  }
 
   if (!options?.silent) {
     prompts.log.info(`Target directory: ${formatDisplayTargetDir(templateInfo.targetDir)}`);
@@ -109,24 +90,6 @@ export async function executeMonorepoTemplate(
     prompts.log.success('Monorepo template created');
   }
 
-  if (initGit) {
-    const gitResult = spawn.sync('git', ['init'], {
-      stdio: 'pipe',
-      cwd: fullPath,
-    });
-
-    if (gitResult.status === 0) {
-      if (!options?.silent) {
-        prompts.log.success('Git repository initialized');
-      }
-    } else {
-      prompts.log.warn('Failed to initialize git repository');
-      if (gitResult.stderr) {
-        prompts.log.info(gitResult.stderr.toString());
-      }
-    }
-  }
-
   // Automatically create a default application in apps/website
   if (!options?.silent) {
     prompts.log.step('Creating default application in apps/website...');
@@ -162,6 +125,9 @@ export async function executeMonorepoTemplate(
     undefined,
     options?.silent ?? false,
   );
+  // Drop the migrator's aliased vite/vitest devDeps for npm/yarn/bun (pnpm
+  // keeps them so its workspace override stays effective; see the helper).
+  dropAliasedRuntimeDevDeps(appProjectPath, workspaceInfo.packageManager);
 
   // Automatically create a default library in packages/utils
   if (!options?.silent) {
@@ -194,27 +160,105 @@ export async function executeMonorepoTemplate(
     options?.silent ?? false,
   );
 
+  alignMonorepoTypeScriptVersion(fullPath, appProjectPath, libraryProjectPath);
+
   return { exitCode: 0, projectDir: templateInfo.targetDir };
 }
 
-const RENAME_FILES: Record<string, string> = {
-  _gitignore: '.gitignore',
-  _npmrc: '.npmrc',
-  '_yarnrc.yml': '.yarnrc.yml',
-};
+/**
+ * Keep every scaffolded workspace member on the same TypeScript version.
+ *
+ * The app and library come from independently updated remote templates. If
+ * their TypeScript ranges resolve to different versions, `typescript` — an
+ * optional peer of vite-plus — resolves differently per member, so package
+ * managers either create separate vite-plus peer instances (pnpm) or hoist a
+ * compiler the other workspace member did not ask for (npm/Yarn). The library
+ * template is the compatibility baseline because its declaration build may
+ * require a newer compiler, so the app adopts its TypeScript range instead of
+ * silently downgrading the library. The workspace catalog entry follows the
+ * same baseline so members that reference `typescript: "catalog:"` (e.g. a
+ * later `vite:generator` scaffold) stay on the workspace's compiler.
+ */
+export function alignMonorepoTypeScriptVersion(
+  workspaceRootPath: string,
+  appProjectPath: string,
+  libraryProjectPath: string,
+): void {
+  const libraryPackage = JSON.parse(
+    fs.readFileSync(path.join(libraryProjectPath, 'package.json'), 'utf8'),
+  ) as {
+    devDependencies?: Record<string, string>;
+  };
+  const typescriptVersion = libraryPackage.devDependencies?.typescript;
+  if (!typescriptVersion) {
+    return;
+  }
 
-function renameFiles(projectDir: string) {
-  for (const [from, to] of Object.entries(RENAME_FILES)) {
-    const fromPath = path.join(projectDir, from);
-    if (fs.existsSync(fromPath)) {
-      fs.renameSync(fromPath, path.join(projectDir, to));
+  editJsonFile<{ devDependencies?: Record<string, string> }>(
+    path.join(appProjectPath, 'package.json'),
+    (pkg) => {
+      if (
+        !pkg.devDependencies?.typescript ||
+        pkg.devDependencies.typescript === typescriptVersion
+      ) {
+        return undefined;
+      }
+      pkg.devDependencies.typescript = typescriptVersion;
+      return pkg;
+    },
+  );
+
+  for (const catalogFile of ['pnpm-workspace.yaml', '.yarnrc.yml']) {
+    const catalogPath = path.join(workspaceRootPath, catalogFile);
+    if (!fs.existsSync(catalogPath)) {
+      continue;
     }
+    const workspaceConfig = readYamlFile(catalogPath) as {
+      catalog?: Record<string, unknown>;
+    } | null;
+    const catalogEntry = workspaceConfig?.catalog?.typescript;
+    if (catalogEntry === undefined || catalogEntry === typescriptVersion) {
+      continue;
+    }
+    editYamlFile(catalogPath, (doc) => {
+      doc.setIn(['catalog', 'typescript'], typescriptVersion);
+    });
   }
 }
 
-function getScopeFromPackageName(packageName: string) {
-  if (packageName.startsWith('@')) {
-    return packageName.split('/')[0];
+/**
+ * Drop the aliased `vite` / `vitest` devDeps that `create-vite` leaves on a
+ * scaffolded sub-package. After migration its scripts already use `vp ...` and
+ * nothing imports `'vite'` directly, so `vite-plus` provides them transitively.
+ *
+ * pnpm is the exception and keeps them: pnpm only surfaces the
+ * pnpm-workspace.yaml `overrides.vite: catalog:` entry through a package that
+ * directly depends on `vite`, so keeping the aliased devDep lets `vp why vite`
+ * reflect the override (resolving to @voidzero-dev/vite-plus-core). npm, yarn,
+ * and bun redirect the transitive/peer vite via their root
+ * overrides/resolutions regardless of a direct dep, so the aliased keys are
+ * dead weight and are dropped.
+ */
+export function dropAliasedRuntimeDevDeps(
+  appProjectPath: string,
+  packageManager: PackageManager,
+): void {
+  // pnpm keeps the aliased vite/vitest so the pnpm-workspace.yaml override has
+  // a direct consumer to redirect; see the doc comment above.
+  if (packageManager === PackageManager.pnpm) {
+    return;
   }
-  return '';
+  editJsonFile<{ devDependencies?: Record<string, string> }>(
+    path.join(appProjectPath, 'package.json'),
+    (pkg) => {
+      let changed = false;
+      for (const name of ['vite', 'vitest']) {
+        if (pkg.devDependencies?.[name]) {
+          delete pkg.devDependencies[name];
+          changed = true;
+        }
+      }
+      return changed ? pkg : undefined;
+    },
+  );
 }

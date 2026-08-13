@@ -3,7 +3,29 @@ import { resolve } from 'node:path';
 import type { VoidZeroThemeConfig } from '@voidzero-dev/vitepress-theme';
 import { extendConfig } from '@voidzero-dev/vitepress-theme/config';
 import { defineConfig, type HeadConfig } from 'vitepress';
+import { groupIconMdPlugin, groupIconVitePlugin } from 'vitepress-plugin-group-icons';
+import llmstxt from 'vitepress-plugin-llms';
 import { withMermaid } from 'vitepress-plugin-mermaid';
+
+// Non-production deploys (the main preview, PR staging) serve their own
+// copies of the install scripts and llms dumps, so the https://vite.plus
+// installer shortcuts and absolute site URLs must point at the deploy's
+// origin instead of production. The deploy workflows set DOCS_SITE_ORIGIN via
+// the deploy-docs composite action; markdown content is rewritten through
+// markdown-it below, and Vue components read the __DOCS_*__ define constants.
+const siteOrigin = process.env.DOCS_SITE_ORIGIN;
+const docsOrigin = siteOrigin || 'https://viteplus.dev';
+const installShUrl = siteOrigin ? `${siteOrigin}/install.sh` : 'https://vite.plus';
+const installPs1Url = siteOrigin ? `${siteOrigin}/install.ps1` : 'https://vite.plus/ps1';
+
+function rewriteInstallUrls(text: string): string {
+  if (!siteOrigin) {
+    return text;
+  }
+  return text
+    .replaceAll('https://vite.plus/ps1', installPs1Url)
+    .replaceAll('https://vite.plus', installShUrl);
+}
 
 const taskRunnerGuideItems = [
   {
@@ -13,6 +35,10 @@ const taskRunnerGuideItems = [
   {
     text: 'Task Caching',
     link: '/guide/cache',
+    items: [
+      { text: 'Automatic Data Tracking', link: '/guide/automatic-data-tracking' },
+      { text: 'GitHub Actions Cache', link: '/guide/github-actions-cache' },
+    ],
   },
   {
     text: 'Running Binaries',
@@ -26,9 +52,14 @@ const guideSidebar = [
     items: [
       { text: 'Getting Started', link: '/guide/' },
       { text: 'Creating a Project', link: '/guide/create' },
-      { text: 'Migrate to Vite+', link: '/guide/migrate' },
+      {
+        text: 'Migrate to Vite+',
+        link: '/guide/migrate',
+        items: [{ text: 'Migration Rules', link: '/guide/migrate-rules' }],
+      },
       { text: 'Installing Dependencies', link: '/guide/install' },
       { text: 'Environment', link: '/guide/env' },
+      { text: 'Installer Environment Variables', link: '/guide/installer-env-vars' },
       { text: 'Why Vite+', link: '/guide/why' },
     ],
   },
@@ -71,7 +102,9 @@ const guideSidebar = [
     items: [
       { text: 'IDE Integration', link: '/guide/ide-integration' },
       { text: 'CI', link: '/guide/ci' },
+      { text: 'Docker', link: '/guide/docker' },
       { text: 'Commit Hooks', link: '/guide/commit-hooks' },
+      { text: 'Monorepo Guide', link: '/guide/monorepo' },
       { text: 'Troubleshooting', link: '/guide/troubleshooting' },
     ],
   },
@@ -99,19 +132,17 @@ export default extendConfig(
         ['meta', { property: 'og:site_name', content: 'Vite+' }],
         ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
         ['meta', { name: 'twitter:site', content: '@voidzerodev' }],
-        [
-          'script',
-          {
-            src: 'https://cdn.usefathom.com/script.js',
-            'data-site': 'JFDLUWBH',
-            'data-spa': 'auto',
-            defer: '',
-          },
-        ],
       ],
       vite: {
+        define: {
+          __DOCS_ORIGIN__: JSON.stringify(docsOrigin),
+          __DOCS_INSTALL_SH_URL__: JSON.stringify(installShUrl),
+          __DOCS_INSTALL_PS1_URL__: JSON.stringify(installPs1Url),
+        },
+        optimizeDeps: {
+          include: ['mermaid > @braintree/sanitize-url'],
+        },
         resolve: {
-          tsconfigPaths: true,
           alias: [
             { find: '@local-assets', replacement: resolve(__dirname, 'theme/assets') },
             { find: '@layouts', replacement: resolve(__dirname, 'theme/layouts') },
@@ -120,6 +151,18 @@ export default extendConfig(
             { find: /^dayjs$/, replacement: 'dayjs/esm' },
           ],
         },
+        plugins: [
+          groupIconVitePlugin({
+            customIcon: {
+              tsdown: 'https://tsdown.dev/tsdown.svg',
+            },
+          }),
+          llmstxt({
+            ignoreFiles: ['team.md'],
+            description: 'The Unified Toolchain for the Web',
+            details: '',
+          }),
+        ],
       },
       themeConfig: {
         variant: 'viteplus' as VoidZeroThemeConfig['variant'],
@@ -137,11 +180,12 @@ export default extendConfig(
           {
             text: 'Resources',
             items: [
+              { text: 'Team', link: '/team' },
               { text: 'GitHub', link: 'https://github.com/voidzero-dev/vite-plus' },
               { text: 'Releases', link: 'https://github.com/voidzero-dev/vite-plus/releases' },
               {
                 text: 'Announcement',
-                link: 'https://voidzero.dev/posts/announcing-vite-plus-alpha',
+                link: 'https://voidzero.dev/posts/announcing-vite-plus-beta',
               },
               {
                 text: 'Contributing',
@@ -157,9 +201,11 @@ export default extendConfig(
               text: 'Configuration',
               items: [
                 { text: 'Configuring Vite+', link: '/config/' },
+                { text: 'Create', link: '/config/create' },
                 { text: 'Run', link: '/config/run' },
                 { text: 'Format', link: '/config/fmt' },
                 { text: 'Lint', link: '/config/lint' },
+                { text: 'Check', link: '/config/check' },
                 { text: 'Test', link: '/config/test' },
                 { text: 'Build', link: '/config/build' },
                 { text: 'Pack', link: '/config/pack' },
@@ -179,6 +225,28 @@ export default extendConfig(
         },
         search: {
           provider: 'local',
+        },
+
+        footer: {
+          copyright: `© ${new Date().getFullYear()} VoidZero Inc. and Vite+ contributors.`,
+          nav: [
+            {
+              title: 'Company',
+              items: [
+                { text: 'VoidZero', link: 'https://voidzero.dev' },
+                { text: 'Vite', link: 'https://vite.dev' },
+                { text: 'Vitest', link: 'https://vitest.dev' },
+                { text: 'Rolldown', link: 'https://rolldown.rs' },
+                { text: 'Oxc', link: 'https://oxc.rs' },
+              ],
+            },
+          ],
+          social: [
+            { icon: 'github', link: 'https://github.com/voidzero-dev/vite-plus' },
+            { icon: 'x', link: 'https://x.com/voidzerodev' },
+            { icon: 'discord', link: 'https://discord.gg/cC6TEVFKSx' },
+            { icon: 'bluesky', link: 'https://bsky.app/profile/voidzero.dev' },
+          ],
         },
       },
       transformHead({ page, pageData }) {
@@ -212,6 +280,36 @@ export default extendConfig(
         ];
 
         return [...ogInfo, canonicalUrlEntry];
+      },
+      markdown: {
+        config(md) {
+          md.use(groupIconMdPlugin);
+          if (siteOrigin) {
+            md.core.ruler.push('rewrite-install-urls', (state) => {
+              const walk = (tokens: typeof state.tokens) => {
+                for (const token of tokens) {
+                  if (
+                    token.type === 'fence' ||
+                    token.type === 'code_inline' ||
+                    token.type === 'text'
+                  ) {
+                    token.content = rewriteInstallUrls(token.content);
+                  }
+                  if (token.type === 'link_open') {
+                    const href = token.attrGet('href');
+                    if (href) {
+                      token.attrSet('href', rewriteInstallUrls(href));
+                    }
+                  }
+                  if (token.children) {
+                    walk(token.children);
+                  }
+                }
+              };
+              walk(state.tokens);
+            });
+          }
+        },
       },
     }),
   ),
