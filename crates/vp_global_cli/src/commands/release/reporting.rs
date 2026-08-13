@@ -605,7 +605,7 @@ pub(super) fn confirm_release(
         let joined_channels = custom_prerelease_channels.join(", ");
         let mut prompt = String::from("Continue with non-standard prerelease channel");
         prompt.push_str(suffix);
-        prompt.push_str(" ");
+        prompt.push(' ');
         prompt.push_str(&joined_channels);
         prompt.push_str("? [y/N] ");
         if !prompt_for_confirmation(&prompt, false)? {

@@ -291,7 +291,7 @@ pub fn replace_top_level_string_property(
                 }
 
                 let mut updated = String::with_capacity(contents.len() + new_value.len());
-                updated.push_str(&contents[..cursor + 1]);
+                updated.push_str(&contents[..=cursor]);
                 updated.push_str(new_value);
                 updated.push_str(&contents[value_end..]);
                 return Ok(updated);
@@ -582,7 +582,7 @@ fn replace_flat_object_string_properties(
                 let Some((value_end, _)) = parse_json_string(contents, cursor) else {
                     break;
                 };
-                rewritten.push_str(&contents[last_copied..cursor + 1]);
+                rewritten.push_str(&contents[last_copied..=cursor]);
                 rewritten.push_str(new_value);
                 last_copied = value_end;
                 index = value_end + 1;

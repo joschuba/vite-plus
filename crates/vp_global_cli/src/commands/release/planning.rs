@@ -342,8 +342,7 @@ pub(super) fn find_latest_package_version(
     Ok(stdout
         .lines()
         .map(str::trim)
-        .filter_map(|tag_name| RELEASE_TAG_FORMAT.parse_version(tag_name))
-        .next())
+        .find_map(|tag_name| RELEASE_TAG_FORMAT.parse_version(tag_name)))
 }
 
 pub(super) fn find_latest_repository_release_tag(
@@ -361,7 +360,7 @@ pub(super) fn find_latest_repository_release_version(
     cwd: &AbsolutePath,
 ) -> Result<Option<Version>, Error> {
     let stdout = capture_git(cwd, ["tag", "--list", "--sort=-creatordate", "v*"])?;
-    Ok(stdout.lines().map(str::trim).filter_map(parse_repository_release_version).next())
+    Ok(stdout.lines().map(str::trim).find_map(parse_repository_release_version))
 }
 
 pub(super) fn find_latest_repository_stable_release_version(

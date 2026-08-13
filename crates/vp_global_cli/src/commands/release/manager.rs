@@ -403,7 +403,7 @@ impl ReleaseManager {
                     plan.repository_url
                         .as_deref()
                         .and_then(parse_github_repo_slug)
-                        .map_or(true, |slug| slug != expected_repository)
+                        .is_none_or(|slug| slug != expected_repository)
                 })
                 .map(|plan| plan.name.as_str())
                 .collect();

@@ -306,10 +306,8 @@ impl<'a> ChecklistStep<'a> {
         let iter = lines.into_iter();
         let (lower, _) = iter.size_hint();
         let mut collected = Vec::with_capacity(lower);
-        for line in iter {
-            if let Some(line) = line {
-                collected.push(line);
-            }
+        for line in iter.flatten() {
+            collected.push(line);
         }
         Self { title, lines: collected }
     }
@@ -630,7 +628,7 @@ pub(super) fn find_existing_release_workflow_path(cwd: &AbsolutePath) -> Option<
             let mut path = String::with_capacity(file_name.len() + 18);
             path.push_str(".github/workflows/");
             path.push_str(&file_name);
-            let should_replace = best_path.as_ref().map_or(true, |best| {
+            let should_replace = best_path.as_ref().is_none_or(|best| {
                 let best_lowercase = best.to_ascii_lowercase();
                 let best_mentions_publish = best_lowercase.contains("publish");
                 (mentions_publish && !best_mentions_publish)

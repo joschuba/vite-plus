@@ -353,13 +353,11 @@ pub(super) async fn publish_packages(
 
 /// Applies final release artifacts transactionally, rolling back already-written files on error.
 pub(super) fn apply_release_artifact_edits(edits: &[ReleaseArtifactEdit]) -> Result<(), Error> {
-    let mut applied_count = 0usize;
-    for edit in edits {
+    for (applied_count, edit) in edits.iter().enumerate() {
         if let Err(error) = write_release_artifact_edit(edit) {
             let rollback_result = rollback_applied_release_artifact_edits(&edits[..applied_count]);
             return Err(release_artifact_error("write release artifacts", error, rollback_result));
         }
-        applied_count += 1;
     }
 
     Ok(())
@@ -673,8 +671,7 @@ pub(super) fn apply_manifest_edits(
     manifest_edits: &[ManifestEdit],
     restore_original: bool,
 ) -> Result<(), Error> {
-    let mut applied_edits = 0usize;
-    for edit in manifest_edits {
+    for (applied_edits, edit) in manifest_edits.iter().enumerate() {
         let contents =
             if restore_original { &edit.original_contents } else { &edit.updated_contents };
         if let Err(error) = fs::write(&edit.path, contents) {
@@ -695,7 +692,6 @@ pub(super) fn apply_manifest_edits(
             }
             return Err(Error::UserMessage(message.into()));
         }
-        applied_edits += 1;
     }
 
     Ok(())
