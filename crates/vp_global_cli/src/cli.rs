@@ -170,6 +170,14 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Develop and build documentation
+    #[command(disable_help_flag = true)]
+    Doc {
+        /// Additional arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Run tasks
     #[command(disable_help_flag = true)]
     Run {
@@ -1064,6 +1072,11 @@ pub async fn run_command_with_options(
         Commands::Pack { args } => {
             maybe_print_runtime_header("pack", &args, render_options.show_header);
             commands::delegate::execute(cwd, "pack", &args, raw_subcommand).await
+        }
+
+        Commands::Doc { args } => {
+            maybe_print_runtime_header("doc", &args, render_options.show_header);
+            commands::delegate::execute(cwd, "doc", &args, raw_subcommand).await
         }
 
         Commands::Run { args } => {

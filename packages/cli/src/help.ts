@@ -1060,6 +1060,43 @@ const commandHelpDocs = {
     ],
     documentationUrl: 'https://viteplus.dev/guide/vpx',
   },
+  doc: {
+    usage: 'vp doc [OPTIONS] [COMMAND] [BACKEND_ARGS]...',
+    summary: [
+      "Run the project's documentation backend.",
+      'Arguments after the command are forwarded to the backend.',
+    ],
+    sections: [
+      {
+        title: 'Commands',
+        rows: [
+          { label: 'dev', description: 'Start the documentation development server [default]' },
+          { label: 'build', description: 'Build documentation for production' },
+          { label: 'preview', description: 'Preview the production build' },
+          { label: 'init', description: 'Set up a documentation backend' },
+        ],
+      },
+      {
+        title: 'Options',
+        rows: [
+          { label: '--backend <BACKEND>', description: 'Select the backend for this invocation' },
+          { label: '-h, --help', description: 'Print help' },
+        ],
+      },
+      {
+        title: 'Examples',
+        lines: [
+          '  vp doc',
+          '  vp doc dev --host 0.0.0.0',
+          '  vp doc build',
+          '  vp doc --backend vitepress build',
+          '  vp doc init vitepress',
+          '  vp -C packages/docs doc build',
+        ],
+      },
+    ],
+    documentationUrl: 'https://viteplus.dev/guide/doc',
+  },
   cache: {
     usage: 'vp cache <COMMAND>',
     summary: 'Manage the task cache.',

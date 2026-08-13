@@ -58,10 +58,14 @@ pub(super) async fn resolve_and_execute(
     envs: &Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
     cwd: &AbsolutePathBuf,
 ) -> Result<ExitStatus, Error> {
-    let is_interactive = matches!(
-        subcommand,
-        SynthesizableSubcommand::Dev { .. } | SynthesizableSubcommand::Preview { .. }
-    );
+    let is_interactive = match &subcommand {
+        SynthesizableSubcommand::Dev { .. } | SynthesizableSubcommand::Preview { .. } => true,
+        // `vp doc` runs a long-lived server for `dev`/`preview`; only `build`
+        // is batch. A parse error is reported by the resolver below.
+        SynthesizableSubcommand::Doc { args } => super::resolver::parse_doc_args(args)
+            .is_ok_and(|request| request.action != super::types::DocAction::Build),
+        _ => false,
+    };
 
     let mut cmd =
         resolve_and_build_command(resolver, subcommand, resolved_vite_config, envs, cwd).await?;

@@ -21,8 +21,8 @@ pub use resolver::SubcommandResolver;
 use rustc_hash::FxHashMap;
 pub(crate) use types::CapturedCommandOutput;
 pub use types::{
-    BoxedResolverFn, CliOptions, ResolveCommandResult, SynthesizableSubcommand, ToolchainArgs,
-    ViteConfigResolverFn,
+    BoxedResolverFn, CliOptions, DocResolverFn, ResolveCommandResult, SynthesizableSubcommand,
+    ToolchainArgs, ViteConfigResolverFn,
 };
 use vp_error::Error;
 pub use vp_shared::init_tracing;

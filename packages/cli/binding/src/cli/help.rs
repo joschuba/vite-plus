@@ -197,6 +197,7 @@ pub(super) fn print_help() {
   {bold}fmt, format{reset}    Format code
   {bold}check{reset}          Run format, lint, and type checks
   {bold}pack{reset}           Build library
+  {bold}doc{reset}            Develop and build documentation
   {bold}run{reset}            Run tasks
   {bold}exec{reset}           Execute a command from local node_modules/.bin
   {bold}preview{reset}        Preview production build

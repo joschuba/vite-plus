@@ -69,8 +69,8 @@ pub enum SynthesizableSubcommand {
         #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Build documentation
-    #[command(disable_help_flag = true, hide = true)]
+    /// Develop and build documentation
+    #[command(disable_help_flag = true)]
     Doc {
         #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
         args: Vec<String>,
@@ -138,6 +138,40 @@ pub(super) enum CLIArgs {
 pub type BoxedResolverFn =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<ResolveCommandResult>> + 'static>>>;
 
+/// Doc resolver function: `ResolveDocRequest` JSON in, `ResolvedDocCommand`
+/// JSON out. The JS side owns backend detection and package resolution.
+pub type DocResolverFn =
+    Box<dyn Fn(String) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + 'static>>>;
+
+/// Lifecycle operation of the `doc` command (rfcs/doc-command.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DocAction {
+    Dev,
+    Build,
+    Preview,
+}
+
+/// Request sent to the JS doc resolver.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolveDocRequest {
+    pub(crate) action: DocAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend: Option<String>,
+    pub(crate) args: Vec<String>,
+}
+
+/// Translated execution returned by the JS doc resolver.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolvedDocCommand {
+    pub(crate) bin_path: String,
+    pub(crate) args: Vec<String>,
+    #[serde(default)]
+    pub(crate) envs: std::collections::HashMap<String, String>,
+}
+
 /// Type alias for vite config resolver function (takes package path, returns JSON string)
 /// Uses Arc for cloning and Send + Sync for use in UserConfigLoader
 pub type ViteConfigResolverFn = Arc<
@@ -153,7 +187,7 @@ pub struct CliOptions {
     pub vite: BoxedResolverFn,
     pub test: BoxedResolverFn,
     pub pack: BoxedResolverFn,
-    pub doc: BoxedResolverFn,
+    pub doc: DocResolverFn,
     pub toolchain_manifest_path: String,
     pub vite_plus_package_path: String,
     pub resolve_universal_vite_config: ViteConfigResolverFn,

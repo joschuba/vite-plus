@@ -83,6 +83,12 @@ const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry { label: "pack", command: "pack", summary: "Build library.", append_help: false },
     CommandEntry {
+        label: "doc",
+        command: "doc",
+        summary: "Develop and build documentation.",
+        append_help: false,
+    },
+    CommandEntry {
         label: "preview",
         command: "preview",
         summary: "Preview production build.",

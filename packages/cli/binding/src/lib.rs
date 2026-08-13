@@ -35,7 +35,8 @@ use napi_derive::napi;
 use vt_path::current_dir;
 
 use crate::cli::{
-    BoxedResolverFn, CliOptions as ViteTaskCliOptions, ResolveCommandResult, ViteConfigResolverFn,
+    BoxedResolverFn, CliOptions as ViteTaskCliOptions, DocResolverFn, ResolveCommandResult,
+    ViteConfigResolverFn,
 };
 
 /// Module initialization - sets up tracing and panic hook
@@ -70,7 +71,8 @@ pub struct CliOptions {
     pub vite: Arc<ThreadsafeFunction<(), Promise<JsCommandResolvedResult>>>,
     pub test: Arc<ThreadsafeFunction<(), Promise<JsCommandResolvedResult>>>,
     pub pack: Arc<ThreadsafeFunction<(), Promise<JsCommandResolvedResult>>>,
-    pub doc: Arc<ThreadsafeFunction<(), Promise<JsCommandResolvedResult>>>,
+    /// Doc resolver: `ResolveDocRequest` JSON in, `ResolvedDocCommand` JSON out.
+    pub doc: Arc<ThreadsafeFunction<String, Promise<String>>>,
     pub cwd: Option<String>,
     /// CLI arguments (should be process.argv.slice(2) from JavaScript)
     pub args: Option<Vec<String>>,
@@ -118,6 +120,31 @@ fn create_resolver(
                 promise.await.map_err(|e| anyhow::anyhow!("{}: {}", error_message, e))?;
 
             Ok(resolved.into())
+        })
+    })
+}
+
+/// Create the doc resolver from a ThreadsafeFunction. The JS error message is
+/// the complete user-facing diagnostic, so it propagates without a prefix.
+fn create_doc_resolver(tsf: Arc<ThreadsafeFunction<String, Promise<String>>>) -> DocResolverFn {
+    fn to_anyhow(error: napi::Error) -> anyhow::Error {
+        // napi prefixes the JS error's name ("Error: ..."); strip it so the
+        // diagnostic renders once behind the CLI's own `error:` prefix.
+        let reason = error.reason.trim();
+        let reason = reason.strip_prefix("Error: ").unwrap_or(reason);
+        if reason.is_empty() {
+            anyhow::anyhow!("Failed to resolve doc command: {error}")
+        } else {
+            anyhow::anyhow!("{reason}")
+        }
+    }
+
+    Box::new(move |request_json: String| {
+        let tsf = tsf.clone();
+        Box::pin(async move {
+            let promise: Promise<String> =
+                tsf.call_async(Ok(request_json)).await.map_err(to_anyhow)?;
+            promise.await.map_err(to_anyhow)
         })
     })
 }
@@ -194,7 +221,7 @@ pub async fn run(options: CliOptions) -> Result<i32> {
             vite: create_resolver(vite_tsf, "Failed to resolve vite command"),
             test: create_resolver(test_tsf, "Failed to resolve test command"),
             pack: create_resolver(pack_tsf, "Failed to resolve pack command"),
-            doc: create_resolver(doc_tsf, "Failed to resolve doc command"),
+            doc: create_doc_resolver(doc_tsf),
             toolchain_manifest_path,
             vite_plus_package_path,
             resolve_universal_vite_config: create_vite_config_resolver(

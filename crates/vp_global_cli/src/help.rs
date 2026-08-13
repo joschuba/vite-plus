@@ -430,6 +430,7 @@ pub fn top_level_help_doc() -> HelpDoc {
                 vec![
                     row("build", "Build for production"),
                     row("pack", "Build library"),
+                    row("doc", "Develop and build documentation"),
                     row("preview", "Preview production build"),
                 ],
             ),
@@ -575,6 +576,7 @@ fn skip_clap_unified_help(command: &str) -> bool {
             | "fmt"
             | "check"
             | "pack"
+            | "doc"
             | "run"
             | "exec"
             | "cache"

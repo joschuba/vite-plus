@@ -9,8 +9,58 @@ use vt_str::Str;
 
 use super::{
     help::should_prepend_vitest_run,
-    types::{CliOptions, ResolvedSubcommand, ResolvedUniversalViteConfig, SynthesizableSubcommand},
+    types::{
+        CliOptions, DocAction, ResolveDocRequest, ResolvedDocCommand, ResolvedSubcommand,
+        ResolvedUniversalViteConfig, SynthesizableSubcommand,
+    },
 };
+
+/// Parse `vp doc` arguments per the doc-command RFC. Vite+ consumes
+/// `--backend` only before the lifecycle command; every argument after the
+/// lifecycle command (or after `--`) forwards to the backend verbatim.
+pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocRequest> {
+    let mut backend: Option<String> = None;
+    let mut action = DocAction::Dev;
+    let mut rest: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--" {
+            rest.extend(args[i + 1..].iter().cloned());
+            break;
+        } else if arg == "--backend" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| anyhow::anyhow!("`--backend` requires a value"))?;
+            backend = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--backend=") {
+            backend = Some(value.to_string());
+        } else if arg.starts_with('-') {
+            anyhow::bail!(
+                "unexpected option `{arg}` before the doc command\n\nPlace backend options after `dev`, `build`, or `preview`, or after `--`."
+            );
+        } else {
+            action = match arg {
+                "dev" => DocAction::Dev,
+                "build" => DocAction::Build,
+                "preview" => DocAction::Preview,
+                // The JS entry handles `doc init` before delegation; reaching
+                // this arm means a task script or a misordered invocation.
+                "init" => anyhow::bail!(
+                    "`init` must be the first argument: run `vp doc init [backend]`"
+                ),
+                other => anyhow::bail!(
+                    "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init"
+                ),
+            };
+            rest.extend(args[i + 1..].iter().cloned());
+            break;
+        }
+        i += 1;
+    }
+    Ok(ResolveDocRequest { action, backend, args: rest })
+}
 
 /// Resolves synthesizable subcommands to concrete programs and arguments.
 /// Used by both direct CLI execution and CommandHandler.
@@ -272,24 +322,32 @@ impl SubcommandResolver {
             }
             SynthesizableSubcommand::Doc { args } => {
                 let cli_options = self.cli_options()?;
-                let resolved = (cli_options.doc)().await?;
-                let js_path = resolved.bin_path;
-                let js_path_str = js_path
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("doc JS path is not valid UTF-8"))?;
-
-                Ok(ResolvedSubcommand {
-                    program: Arc::from(OsStr::new("node")),
-                    args: iter::once(Str::from(js_path_str))
-                        .chain(args.into_iter().map(Str::from))
-                        .collect(),
-                    cache_config: UserCacheConfig::with_config(EnabledCacheConfig {
+                let request = parse_doc_args(&args)?;
+                // Only `doc build` is a cacheable batch operation; the servers
+                // stay uncached like `dev`/`preview`.
+                let cache_config = match request.action {
+                    DocAction::Build => UserCacheConfig::with_config(EnabledCacheConfig {
                         env: None,
                         untracked_env: None,
                         input: None,
                         output: None,
                     }),
-                    envs: merge_resolved_envs(envs, resolved.envs),
+                    DocAction::Dev | DocAction::Preview => UserCacheConfig::disabled(),
+                };
+                let request_json = serde_json::to_string(&request)?;
+                let response_json = (cli_options.doc)(request_json).await?;
+                let resolved: ResolvedDocCommand = serde_json::from_str(&response_json)
+                    .inspect_err(|_| {
+                        tracing::error!("Failed to parse doc resolution: {response_json}");
+                    })?;
+
+                Ok(ResolvedSubcommand {
+                    program: Arc::from(OsStr::new("node")),
+                    args: iter::once(Str::from(resolved.bin_path.as_str()))
+                        .chain(resolved.args.iter().map(|arg| Str::from(arg.as_str())))
+                        .collect(),
+                    cache_config,
+                    envs: merge_resolved_envs(envs, resolved.envs.into_iter().collect()),
                 })
             }
             SynthesizableSubcommand::Check { .. } => {
