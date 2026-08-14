@@ -9,7 +9,7 @@
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this project uses Nuxt (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts). `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run dev`?
 ```
 
@@ -22,20 +22,20 @@ hint: did you mean `vp run dev`?
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this project uses Nuxt (nuxt.config.ts), but `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts). `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run build`?
 ```
 
 ## `cd src && vp dev`
 
-the refusal reaches the enclosing package from a subdirectory, like `vp run` does
+the refusal finds the enclosing package from a subdirectory, with the same walk `vp run` uses
 
 **Exit code:** 1
 
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this project uses Nuxt (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts). `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run dev`?
 ```
 
@@ -48,13 +48,13 @@ an Astro config triggers the same refusal
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this project uses Astro (astro.config.mjs), but `vp dev` runs the bundled Vite CLI, not the Astro CLI.
+error: this project uses Astro (astro.config.mjs). `vp dev` runs the bundled Vite CLI, not the Astro CLI.
 hint: did you mean `vp run dev`?
 ```
 
 ## `vp dev --config vite.config.ts --port 12312312312`
 
-an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (invalid port exits the server immediately)
+an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)
 
 **Exit code:** 1
 
@@ -68,7 +68,7 @@ Error: No available ports found between 12312312312 and 65535
 
 ## `vp run dev`
 
-`vp run dev` runs the dev script the refusal points at
+`vp run dev` runs the dev script that the refusal points at
 
 ```
 VITE+ - The Unified Toolchain for the Web

@@ -59,8 +59,8 @@ async fn execute_direct_subcommand(
         app_target::AppTarget::Dir(dir) => dir,
         app_target::AppTarget::CurrentDir => cwd,
     };
-    // Elicitation can land in a package the invocation-directory check never
-    // saw, such as a `defaultPackage` that holds a Nuxt or Astro app.
+    // Elicitation can select a package that the first check never saw, for
+    // example a `defaultPackage` that holds a Nuxt or Astro app.
     if retargeted && let Some(exit) = framework_guard::check(&subcommand, cwd) {
         return Ok(exit);
     }
@@ -393,8 +393,9 @@ pub async fn main(
 
     match cli_args {
         CLIArgs::Synthesizable(subcmd) => {
-            // A Nuxt/Astro project cannot run through the bundled Vite CLI,
-            // so refuse before the script note recommends anything else.
+            // A Nuxt or Astro project cannot run through the bundled Vite
+            // CLI. Refuse before the script note recommends a different
+            // path.
             if let Some(exit) = framework_guard::check(&subcmd, &cwd) {
                 return Ok(exit);
             }

@@ -1,13 +1,13 @@
 //! Refusal for framework projects whose own CLI wraps Vite.
 //!
-//! `vp dev` and `vp build` run the bundled Vite CLI. Nuxt and Astro use Vite
-//! under the hood but only through their own CLIs, so the bundled Vite CLI
-//! cannot serve or build them: dev answers every URL with 404 and build stops
-//! on the missing `index.html` entry. A framework config file next to the
-//! nearest `package.json` turns both commands into an error that points at
-//! `vp run <command>` (voidzero-dev/vite-plus#1506). An explicit
-//! `--config`/`-c` flag skips the refusal: it selects a Vite config on
-//! purpose, so the bundled Vite CLI stays reachable.
+//! `vp dev` and `vp build` run the bundled Vite CLI. Nuxt and Astro run Vite
+//! only through their own CLIs. The bundled Vite CLI cannot serve or build
+//! these projects: dev answers every URL with 404, and build stops on the
+//! missing `index.html` entry. When a framework config file is next to the
+//! nearest `package.json`, the two commands stop with an error that points
+//! at `vp run <command>` (voidzero-dev/vite-plus#1506). An explicit
+//! `--config`/`-c` flag selects a Vite config on purpose, so it skips the
+//! refusal.
 
 use owo_colors::OwoColorize;
 use vp_shared::output;
@@ -16,18 +16,18 @@ use vt_path::AbsolutePath;
 
 use super::types::SynthesizableSubcommand;
 
-/// Frameworks with a Vite-wrapping CLI, marked by the config file next to
-/// `package.json` that their own CLI loads. Each list mirrors that loader's
-/// own file names, in its resolution order.
+/// Frameworks that wrap Vite behind their own CLI. Each entry lists the
+/// config files that the framework's loader resolves, in its resolution
+/// order.
 const FRAMEWORKS: &[Framework] = &[
-    // Nuxt resolves `nuxt.config` through c12: `loadNuxtConfig` passes
+    // Nuxt resolves `nuxt.config` through c12. `loadNuxtConfig` passes
     // `configFile: "nuxt.config"`
-    // (https://github.com/nuxt/nuxt/blob/v4.5.2/packages/kit/src/loader/config.ts)
-    // and c12 tries the script extensions of `SUPPORTED_EXTENSIONS`
+    // (https://github.com/nuxt/nuxt/blob/v4.5.2/packages/kit/src/loader/config.ts),
+    // and c12 tries the script extensions in `SUPPORTED_EXTENSIONS`
     // (https://github.com/unjs/c12/blob/v3.3.4/src/loader.ts). c12 also
     // accepts data configs (`.json`, `.jsonc`, `.json5`, `.yaml`, `.yml`,
-    // `.toml`) and rc files; those are rare enough for the guard to leave
-    // alone.
+    // `.toml`) and rc files. Those are rare, so the guard does not check
+    // them.
     Framework {
         name: "Nuxt",
         config_files: &[
@@ -39,9 +39,9 @@ const FRAMEWORKS: &[Framework] = &[
             "nuxt.config.cts",
         ],
     },
-    // Astro searches exactly these four names: `configPaths` in
+    // Astro searches only these four names: `configPaths` in
     // https://github.com/withastro/astro/blob/astro@7.2.2/packages/astro/src/core/config/config.ts.
-    // Astro loads no `.cjs`/`.cts` config.
+    // Astro does not load a `.cjs` or `.cts` config.
     Framework {
         name: "Astro",
         config_files: &[
@@ -60,8 +60,8 @@ struct Framework {
 
 /// Refuse `vp dev` / `vp build` in a Nuxt or Astro project.
 ///
-/// Returns the exit status to stop with once the refusal printed, or `None`
-/// when the command should proceed.
+/// Returns the exit status after it prints the refusal. Returns `None` when
+/// the command can proceed.
 pub(super) fn check(
     subcommand: &SynthesizableSubcommand,
     cwd: &AbsolutePath,
@@ -74,15 +74,15 @@ pub(super) fn check(
     if has_explicit_config(args) {
         return None;
     }
-    // The nearest `package.json` is the package `vp run` resolves the task
-    // from, so the refusal and its hint stay consistent from a subdirectory.
+    // `vp run` resolves the task from the nearest `package.json`. The same
+    // walk here keeps the hint correct from a subdirectory.
     let package = vt_workspace::find_package_root(cwd).ok()?;
     let (framework, config_file) = detect(package.path)?;
 
     let built_in = format!("`vp {command}`").bright_blue().to_string();
     let via_run = format!("`vp run {command}`").bright_blue().to_string();
     output::error(&format!(
-        "this project uses {name} ({config_file}), but {built_in} runs the bundled Vite CLI, \
+        "this project uses {name} ({config_file}). {built_in} runs the bundled Vite CLI, \
          not the {name} CLI.",
         name = framework.name,
     ));
@@ -103,7 +103,8 @@ fn detect(dir: &AbsolutePath) -> Option<(&'static Framework, &'static str)> {
 }
 
 /// Whether the forwarded Vite args select a config file explicitly. The
-/// capital `-C` retarget flag is a different flag and does not count.
+/// capital `-C` flag retargets the directory. It is a different flag and
+/// does not count.
 fn has_explicit_config(args: &[String]) -> bool {
     args.iter().any(|arg| {
         arg == "-c" || arg == "--config" || arg.starts_with("--config=") || arg.starts_with("-c=")

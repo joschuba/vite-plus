@@ -51,7 +51,7 @@ Select a task (↑/↓, Enter to run, Esc to clear):
 
 `build`, `preview`, `lint`, `fmt`, `check`, and `pack` work the same way.
 
-If the project defines that script or task, run it with `vp run <name>`. For example, with a `"dev": "astro dev"` script, `vp run dev` starts Astro. In a Nuxt or Astro project, `vp dev` and `vp build` stop with an error that points at `vp run <name>`: those frameworks run Vite through their own CLI, so the bundled Vite CLI cannot serve or build them.
+If the project defines that script or task, run it with `vp run <name>`. For example, with a `"dev": "astro dev"` script, `vp run dev` starts Astro. In a Nuxt or Astro project, `vp dev` and `vp build` stop with an error that points at `vp run <name>`. Those frameworks run Vite through their own CLI. The bundled Vite CLI cannot serve or build them.
 
 ## Caching
 
