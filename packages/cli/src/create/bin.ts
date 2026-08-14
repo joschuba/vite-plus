@@ -46,6 +46,7 @@ import {
   type CommandRunSummary,
   defaultInteractive,
   downloadPackageManager,
+  promptDocPackage,
   promptGitHooks,
   resolveGitInit,
   runViteFmt,
@@ -129,6 +130,11 @@ const helpMessage = renderCliDoc({
           description: 'Write editor config files for the specified editor.',
         },
         { label: '--no-editor', description: 'Skip writing editor config files' },
+        {
+          label: '--doc [PROVIDER]',
+          description: 'Include a documentation package (vite:monorepo)',
+        },
+        { label: '--no-doc', description: 'Skip the documentation package' },
         { label: '--git', description: 'Initialize a git repository' },
         { label: '--no-git', description: 'Skip git repository initialization' },
         {
@@ -243,6 +249,12 @@ export interface Options {
   verbose: boolean;
   agent?: string | string[] | false;
   editor?: string | false;
+  /**
+   * Documentation package for the monorepo template: a provider name or
+   * `true` includes it, `false` (`--no-doc`) skips it, `undefined` asks in
+   * interactive mode and skips otherwise (rfcs/doc-command.md).
+   */
+  doc?: string | boolean;
   git?: boolean;
   hooks?: boolean;
   packageManager?: string;
@@ -284,6 +296,7 @@ function parseArgs() {
     verbose?: boolean;
     agent?: ParsedAgentOption;
     editor?: string | false | Array<string | false>;
+    doc?: string | boolean;
     git?: boolean;
     hooks?: boolean;
     'package-manager'?: string;
@@ -307,6 +320,7 @@ function parseArgs() {
       verbose: parsed.verbose || false,
       agent: normalizeAgentOption(parsed.agent),
       editor: normalizeEditorOption(parsed.editor),
+      doc: parsed.doc,
       git: parsed.git,
       hooks: parsed.hooks,
       packageManager: parsed['package-manager'],
@@ -882,6 +896,20 @@ Use \`vp create --list\` to list all available templates, or run \`vp create --h
     shouldSetupHooks = await promptGitHooks(options);
   }
 
+  // Documentation package for the monorepo template (rfcs/doc-command.md,
+  // New Projects). Bundled org monorepos define their own layout, so the
+  // option only applies to `vite:monorepo`.
+  let includeDocPackage = false;
+  if (selectedTemplateName === BuiltinTemplate.monorepo && !isBundledMonorepo) {
+    if (typeof options.doc === 'string' && options.doc !== 'vitepress') {
+      cancelAndExit(
+        `Unsupported documentation provider \`${options.doc}\` (supported: vitepress)`,
+        1,
+      );
+    }
+    includeDocPackage = await promptDocPackage(options);
+  }
+
   const createProgress =
     options.interactive && compactOutput ? prompts.spinner({ indicator: 'timer' }) : undefined;
   let createProgressStarted = false;
@@ -1042,7 +1070,7 @@ Use \`vp create --list\` to list all available templates, or run \`vp create --h
       : await executeMonorepoTemplate(
           workspaceInfo,
           { ...templateInfo, packageName, targetDir },
-          { silent: compactOutput },
+          { silent: compactOutput, doc: includeDocPackage },
         );
     const { projectDir } = result;
     if (result.exitCode !== 0 || !projectDir) {

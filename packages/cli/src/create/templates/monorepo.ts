@@ -13,16 +13,18 @@ import { editYamlFile, readYamlFile } from '../../utils/yaml.ts';
 import type { ExecutionWithProjectDir } from '../command.ts';
 import { discoverTemplate } from '../discovery.ts';
 import { copyDir, formatDisplayTargetDir, renameFiles, setPackageName } from '../utils.ts';
+import { executeDocScaffold } from './doc.ts';
 import { runRemoteTemplateCommand } from './remote.ts';
 import { type BuiltinTemplateInfo, LibraryTemplateRepo } from './types.ts';
 
 export const InitialMonorepoAppDir = 'apps/website';
+export const InitialMonorepoDocDir = 'apps/docs';
 
 // Execute vite:monorepo - copy from templates/monorepo
 export async function executeMonorepoTemplate(
   workspaceInfo: WorkspaceInfo,
   templateInfo: BuiltinTemplateInfo,
-  options?: { silent?: boolean },
+  options?: { silent?: boolean; doc?: boolean },
 ): Promise<ExecutionWithProjectDir> {
   assert(templateInfo.packageName, 'packageName is required');
   assert(templateInfo.targetDir, 'targetDir is required');
@@ -161,6 +163,31 @@ export async function executeMonorepoTemplate(
   );
 
   alignMonorepoTypeScriptVersion(fullPath, appProjectPath, libraryProjectPath);
+
+  // Optional documentation package (rfcs/doc-command.md, New Projects). The
+  // scaffold is authored for `vp doc`, so it needs no migration pass; the
+  // caller's monorepo rewrite and install cover it like any workspace member.
+  if (options?.doc) {
+    if (!options?.silent) {
+      prompts.log.step(`Creating documentation package in ${InitialMonorepoDocDir}...`);
+    }
+    const docPackageName = workspaceInfo.monorepoScope
+      ? `${workspaceInfo.monorepoScope}/docs`
+      : 'docs';
+    const docResult = await executeDocScaffold(
+      workspaceInfo,
+      {
+        ...templateInfo,
+        packageName: docPackageName,
+        targetDir: `${templateInfo.targetDir}/${InitialMonorepoDocDir}`,
+      },
+      options,
+    );
+    if (docResult.exitCode !== 0) {
+      prompts.log.error(`Failed to create documentation package, exit code: ${docResult.exitCode}`);
+      return docResult;
+    }
+  }
 
   return { exitCode: 0, projectDir: templateInfo.targetDir };
 }

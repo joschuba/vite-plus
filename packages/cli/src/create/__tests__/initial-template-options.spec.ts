@@ -4,7 +4,7 @@ import { getInitialTemplateOptions } from '../initial-template-options.js';
 import type { CreateTemplateEntry } from '../org-manifest.js';
 
 describe('getInitialTemplateOptions', () => {
-  it('shows only built-in monorepo, application, and library options outside a monorepo', () => {
+  it('shows the built-in monorepo, application, library, and doc options outside a monorepo', () => {
     expect(getInitialTemplateOptions(false)).toEqual([
       {
         label: 'Vite+ Monorepo',
@@ -21,10 +21,15 @@ describe('getInitialTemplateOptions', () => {
         value: 'vite:library',
         hint: 'Create vite libraries',
       },
+      {
+        label: 'Vite+ Documentation',
+        value: 'vite:doc',
+        hint: 'Create a documentation site (VitePress)',
+      },
     ]);
   });
 
-  it('shows only built-in application and library options inside a monorepo', () => {
+  it('shows the built-in application, library, and doc options inside a monorepo', () => {
     expect(getInitialTemplateOptions(true)).toEqual([
       {
         label: 'Vite+ Application',
@@ -35,6 +40,11 @@ describe('getInitialTemplateOptions', () => {
         label: 'Vite+ Library',
         value: 'vite:library',
         hint: 'Create vite libraries',
+      },
+      {
+        label: 'Vite+ Documentation',
+        value: 'vite:doc',
+        hint: 'Create a documentation site (VitePress)',
       },
     ]);
   });

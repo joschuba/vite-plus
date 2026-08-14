@@ -11,7 +11,7 @@ Use any builtin, local or remote template with Vite+.
 
 Arguments:
   TEMPLATE  Template name. Run `vp create --list` to see available templates.
-            - Default: vite:monorepo, vite:application, vite:library, vite:generator
+            - Default: vite:monorepo, vite:application, vite:library, vite:doc, vite:generator
             - Remote: vite, @tanstack/start, create-next-app,
               create-nuxt, github:user/repo, https://github.com/user/template-repo, etc.
             - Local: a `create.templates` entry name from vite.config.ts (monorepo)
@@ -25,6 +25,8 @@ Options:
   --no-agent              Skip writing coding agent instructions
   --editor NAME           Write editor config files for the specified editor.
   --no-editor             Skip writing editor config files
+  --doc [PROVIDER]        Include a documentation package (vite:monorepo)
+  --no-doc                Skip the documentation package
   --git                   Initialize a git repository
   --no-git                Skip git repository initialization
   --hooks                 Set up pre-commit hooks (default in non-interactive mode)
@@ -57,6 +59,7 @@ Examples:
   vp create vite:monorepo
   vp create vite:application
   vp create vite:library
+  vp create vite:doc
   vp create vite:generator
 
   # Use templates from GitHub (via degit)
@@ -81,7 +84,7 @@ Use any builtin, local or remote template with Vite+.
 
 Arguments:
   TEMPLATE  Template name. Run `vp create --list` to see available templates.
-            - Default: vite:monorepo, vite:application, vite:library, vite:generator
+            - Default: vite:monorepo, vite:application, vite:library, vite:doc, vite:generator
             - Remote: vite, @tanstack/start, create-next-app,
               create-nuxt, github:user/repo, https://github.com/user/template-repo, etc.
             - Local: a `create.templates` entry name from vite.config.ts (monorepo)
@@ -95,6 +98,8 @@ Options:
   --no-agent              Skip writing coding agent instructions
   --editor NAME           Write editor config files for the specified editor.
   --no-editor             Skip writing editor config files
+  --doc [PROVIDER]        Include a documentation package (vite:monorepo)
+  --no-doc                Skip the documentation package
   --git                   Initialize a git repository
   --no-git                Skip git repository initialization
   --hooks                 Set up pre-commit hooks (default in non-interactive mode)
@@ -127,6 +132,7 @@ Examples:
   vp create vite:monorepo
   vp create vite:application
   vp create vite:library
+  vp create vite:doc
   vp create vite:generator
 
   # Use templates from GitHub (via degit)
@@ -151,7 +157,7 @@ Use any builtin, local or remote template with Vite+.
 
 Arguments:
   TEMPLATE  Template name. Run `vp create --list` to see available templates.
-            - Default: vite:monorepo, vite:application, vite:library, vite:generator
+            - Default: vite:monorepo, vite:application, vite:library, vite:doc, vite:generator
             - Remote: vite, @tanstack/start, create-next-app,
               create-nuxt, github:user/repo, https://github.com/user/template-repo, etc.
             - Local: a `create.templates` entry name from vite.config.ts (monorepo)
@@ -165,6 +171,8 @@ Options:
   --no-agent              Skip writing coding agent instructions
   --editor NAME           Write editor config files for the specified editor.
   --no-editor             Skip writing editor config files
+  --doc [PROVIDER]        Include a documentation package (vite:monorepo)
+  --no-doc                Skip the documentation package
   --git                   Initialize a git repository
   --no-git                Skip git repository initialization
   --hooks                 Set up pre-commit hooks (default in non-interactive mode)
@@ -197,6 +205,7 @@ Examples:
   vp create vite:monorepo
   vp create vite:application
   vp create vite:library
+  vp create vite:doc
   vp create vite:generator
 
   # Use templates from GitHub (via degit)

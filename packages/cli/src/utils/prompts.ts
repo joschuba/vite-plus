@@ -293,6 +293,30 @@ export async function promptGitInit(options: {
   return false; // non-interactive default
 }
 
+// The monorepo template's documentation package (rfcs/doc-command.md, New
+// Projects): the interactive prompt recommends include; a non-interactive
+// run includes the package only with an explicit `--doc`.
+export async function promptDocPackage(options: {
+  doc?: string | boolean;
+  interactive: boolean;
+}): Promise<boolean> {
+  if (options.doc !== undefined) {
+    return options.doc !== false;
+  }
+  if (options.interactive) {
+    const selected = await prompts.confirm({
+      message: 'Include a documentation package (VitePress)?',
+      initialValue: true,
+    });
+    if (prompts.isCancel(selected)) {
+      cancelAndExit();
+      return false;
+    }
+    return selected;
+  }
+  return false;
+}
+
 // Git initialization only applies to a brand-new standalone project or
 // monorepo. A package added to an existing monorepo shares that monorepo's
 // repository, so git setup (and its prompt) is skipped.
