@@ -1,0 +1,17 @@
+# `vp dev` and `vp build` run the bundled Vite CLI, which cannot serve or
+# build a project whose framework wraps Vite behind its own CLI. A Nuxt or
+# Astro config file next to the nearest `package.json` turns both commands
+# into an error that points at `vp run <command>`. This project is Nuxt-shaped
+# at the root and holds an Astro package in `astro/`.
+[[case]]
+name = "builtin_framework_guard"
+vp = ["local", "global"]
+skip-platforms = ["windows"]
+steps = [
+  { argv = ["vp", "dev"], comment = "`vp dev` refuses in a Nuxt project and points at the dev script", continue-on-failure = true },
+  { argv = ["vp", "build"], comment = "`vp build` refuses the same way", continue-on-failure = true },
+  { argv = ["vp", "dev"], cwd = "src", comment = "the refusal reaches the enclosing package from a subdirectory, like `vp run` does", continue-on-failure = true },
+  { argv = ["vp", "dev"], cwd = "astro", comment = "an Astro config triggers the same refusal", continue-on-failure = true },
+  { argv = ["vp", "dev", "--config", "vite.config.ts", "--port", "12312312312"], comment = "an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (invalid port exits the server immediately)", continue-on-failure = true },
+  { argv = ["vp", "run", "dev"], comment = "`vp run dev` runs the dev script the refusal points at" },
+]

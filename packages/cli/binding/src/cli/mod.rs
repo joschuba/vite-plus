@@ -5,6 +5,7 @@
 
 mod app_target;
 mod execution;
+mod framework_guard;
 mod handler;
 mod help;
 mod resolver;
@@ -58,6 +59,11 @@ async fn execute_direct_subcommand(
         app_target::AppTarget::Dir(dir) => dir,
         app_target::AppTarget::CurrentDir => cwd,
     };
+    // Elicitation can land in a package the invocation-directory check never
+    // saw, such as a `defaultPackage` that holds a Nuxt or Astro app.
+    if retargeted && let Some(exit) = framework_guard::check(&subcommand, cwd) {
+        return Ok(exit);
+    }
 
     // The resolver hands back the workspace root it already found whenever the
     // command runs in the unchanged cwd (never after a -C/elicitation
@@ -387,6 +393,11 @@ pub async fn main(
 
     match cli_args {
         CLIArgs::Synthesizable(subcmd) => {
+            // A Nuxt/Astro project cannot run through the bundled Vite CLI,
+            // so refuse before the script note recommends anything else.
+            if let Some(exit) = framework_guard::check(&subcmd, &cwd) {
+                return Ok(exit);
+            }
             // Only the built-ins can be mistaken for a script. `run`/`cache`
             // below are the script path itself; `install` and friends
             // legitimately trigger a project's `install` lifecycle scripts
