@@ -6,7 +6,10 @@
  * adding entries here; detection and resolution stay generic.
  */
 
-export type DocProviderId = 'vitepress' | 'ox-content';
+export type DocProviderId = 'vitepress' | 'ox-content' | 'vuepress';
+
+/** Lifecycle commands a provider can support. `build` is always required. */
+export type DocCapability = 'dev' | 'build' | 'preview';
 
 export type DocProviderTarget =
   | { kind: 'package-bin'; packageName: string; binName: string }
@@ -29,6 +32,8 @@ export interface DocProviderDefinition {
   markerHint?: string;
   /** Supported semver range for the marker package, checked before execution. */
   versionRange?: string;
+  /** Lifecycle commands this provider supports. */
+  capabilities: DocCapability[];
   target: DocProviderTarget;
   /** One-command setup support for `vp doc init`. */
   init?: DocProviderInit;
@@ -41,6 +46,7 @@ export const DOC_PROVIDERS: readonly DocProviderDefinition[] = [
     marker: 'vitepress',
     markerHint: 'major version 2',
     versionRange: '>=2.0.0-0 <3.0.0',
+    capabilities: ['dev', 'build', 'preview'],
     target: { kind: 'package-bin', packageName: 'vitepress', binName: 'vitepress' },
     init: {
       // `next` is the VitePress 2 dist-tag while 2.0 is prerelease; a range
@@ -58,6 +64,7 @@ export const DOC_PROVIDERS: readonly DocProviderDefinition[] = [
     id: 'ox-content',
     displayName: 'Ox Content',
     marker: '@ox-content/vite-plugin',
+    capabilities: ['dev', 'build', 'preview'],
     target: { kind: 'builtin-vite' },
     init: {
       dependencies: ['@ox-content/vite-plugin'],
@@ -83,5 +90,17 @@ export const DOC_PROVIDERS: readonly DocProviderDefinition[] = [
         },
       ],
     },
+  },
+  {
+    // VuePress has no native preview command. The RFC defers this provider;
+    // the PoC includes it to exercise the capability gate with the RFC's own
+    // example. No init metadata, so it stays out of the init prompt and list.
+    id: 'vuepress',
+    displayName: 'VuePress 2',
+    marker: 'vuepress',
+    markerHint: 'major version 2',
+    versionRange: '>=2.0.0-0 <3.0.0',
+    capabilities: ['dev', 'build'],
+    target: { kind: 'package-bin', packageName: 'vuepress', binName: 'vuepress' },
   },
 ];

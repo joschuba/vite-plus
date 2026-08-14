@@ -82,6 +82,13 @@ export async function resolveDoc(err: null | Error, requestJson: string): Promis
   const cwd = process.cwd();
   const provider = selectProvider(request, cwd);
 
+  if (!provider.capabilities.includes(request.action)) {
+    throw new Error(
+      `the \`${provider.id}\` provider does not support \`vp doc ${request.action}\`\n\n` +
+        `Supported commands: ${provider.capabilities.join(', ')}`,
+    );
+  }
+
   const marker = findInstalledPackage(provider.marker, cwd);
   if (!marker) {
     throw new Error(

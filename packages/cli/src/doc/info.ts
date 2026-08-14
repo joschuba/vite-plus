@@ -14,8 +14,6 @@ import { accent, errorMsg, log, muted } from '../utils/terminal.ts';
 import { detectProviders, findInstalledPackage, findNearestManifest } from './detect.ts';
 import type { DocProviderDefinition } from './providers.ts';
 
-const LIFECYCLE_COMMANDS = ['dev', 'build', 'preview'] as const;
-
 interface DocInfoReport {
   provider: string | null;
   displayName?: string;
@@ -50,16 +48,19 @@ function buildReport(provider: DocProviderDefinition, cwd: string): DocInfoRepor
       supportedRange: provider.versionRange,
       versionSupported,
     },
-    commands: [...LIFECYCLE_COMMANDS],
+    commands: [...provider.capabilities],
   };
 }
 
 function printHumanReport(report: DocInfoReport): void {
   log(`Provider:  ${accent(report.provider ?? '')} (${report.displayName})`);
   log(`Source:    dependency marker \`${report.source?.marker}\` in package.json`);
-  const version = report.tool?.version ?? 'not installed';
-  log(`Tool:      ${report.tool?.package}@${version} ${muted(`(${report.target})`)}`);
-  if (report.tool && !report.tool.versionSupported) {
+  const toolLabel =
+    report.tool?.version !== null && report.tool?.version !== undefined
+      ? `${report.tool.package}@${report.tool.version}`
+      : `${report.tool?.package} (not installed)`;
+  log(`Tool:      ${toolLabel} ${muted(`(${report.target})`)}`);
+  if (report.tool && report.tool.version !== null && !report.tool.versionSupported) {
     log(
       `Warning:   installed version is unsupported` +
         (report.tool.supportedRange ? ` (requires \`${report.tool.supportedRange}\`)` : ''),
