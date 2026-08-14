@@ -17,19 +17,45 @@ use vt_path::AbsolutePath;
 use super::types::SynthesizableSubcommand;
 
 /// Frameworks with a Vite-wrapping CLI, marked by the config file next to
-/// `package.json` that their own CLI loads.
+/// `package.json` that their own CLI loads. Each list mirrors that loader's
+/// own file names, in its resolution order.
 const FRAMEWORKS: &[Framework] = &[
-    Framework { name: "Nuxt", article: "a", config_stem: "nuxt.config" },
-    Framework { name: "Astro", article: "an", config_stem: "astro.config" },
+    // Nuxt resolves `nuxt.config` through c12: `loadNuxtConfig` passes
+    // `configFile: "nuxt.config"`
+    // (https://github.com/nuxt/nuxt/blob/v4.5.2/packages/kit/src/loader/config.ts)
+    // and c12 tries the script extensions of `SUPPORTED_EXTENSIONS`
+    // (https://github.com/unjs/c12/blob/v3.3.4/src/loader.ts). c12 also
+    // accepts data configs (`.json`, `.jsonc`, `.json5`, `.yaml`, `.yml`,
+    // `.toml`) and rc files; those are rare enough for the guard to leave
+    // alone.
+    Framework {
+        name: "Nuxt",
+        config_files: &[
+            "nuxt.config.js",
+            "nuxt.config.ts",
+            "nuxt.config.mjs",
+            "nuxt.config.cjs",
+            "nuxt.config.mts",
+            "nuxt.config.cts",
+        ],
+    },
+    // Astro searches exactly these four names: `configPaths` in
+    // https://github.com/withastro/astro/blob/astro@7.2.2/packages/astro/src/core/config/config.ts.
+    // Astro loads no `.cjs`/`.cts` config.
+    Framework {
+        name: "Astro",
+        config_files: &[
+            "astro.config.mjs",
+            "astro.config.js",
+            "astro.config.ts",
+            "astro.config.mts",
+        ],
+    },
 ];
-
-/// Config extensions both framework loaders accept.
-const CONFIG_EXTENSIONS: &[&str] = &["ts", "js", "mjs", "cjs", "mts", "cts"];
 
 struct Framework {
     name: &'static str,
-    article: &'static str,
-    config_stem: &'static str,
+    config_files: &'static [&'static str],
 }
 
 /// Refuse `vp dev` / `vp build` in a Nuxt or Astro project.
@@ -56,9 +82,8 @@ pub(super) fn check(
     let built_in = format!("`vp {command}`").bright_blue().to_string();
     let via_run = format!("`vp run {command}`").bright_blue().to_string();
     output::error(&format!(
-        "this is {article} {name} project ({config_file}), but {built_in} runs the bundled \
-         Vite CLI, not the {name} CLI.",
-        article = framework.article,
+        "this project uses {name} ({config_file}), but {built_in} runs the bundled Vite CLI, \
+         not the {name} CLI.",
         name = framework.name,
     ));
     output::raw_stderr(&format!("hint: did you mean {via_run}?"));
@@ -66,11 +91,10 @@ pub(super) fn check(
 }
 
 /// The first framework config file present in `dir`.
-fn detect(dir: &AbsolutePath) -> Option<(&'static Framework, String)> {
+fn detect(dir: &AbsolutePath) -> Option<(&'static Framework, &'static str)> {
     for framework in FRAMEWORKS {
-        for extension in CONFIG_EXTENSIONS {
-            let config_file = format!("{}.{extension}", framework.config_stem);
-            if dir.join(config_file.as_str()).as_path().is_file() {
+        for &config_file in framework.config_files {
+            if dir.join(config_file).as_path().is_file() {
                 return Some((framework, config_file));
             }
         }
@@ -127,6 +151,19 @@ mod tests {
         std::fs::create_dir_all(dir.as_path().join("nuxt.config.ts")).expect("create dir");
         std::fs::write(dir.as_path().join("vite.config.ts"), "export default {}")
             .expect("write vite config");
+
+        assert!(detect(&dir).is_none());
+
+        std::fs::remove_dir_all(dir.as_path()).expect("remove temp dir");
+    }
+
+    #[test]
+    fn ignores_config_names_astro_does_not_load() {
+        let dir = temp_dir("astro-cjs");
+        std::fs::write(dir.as_path().join("astro.config.cjs"), "module.exports = {}")
+            .expect("write cjs config");
+        std::fs::write(dir.as_path().join("astro.config.cts"), "module.exports = {}")
+            .expect("write cts config");
 
         assert!(detect(&dir).is_none());
 

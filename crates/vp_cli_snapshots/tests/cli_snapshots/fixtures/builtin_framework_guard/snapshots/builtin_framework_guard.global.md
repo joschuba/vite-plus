@@ -9,7 +9,7 @@
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this is a Nuxt project (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run dev`?
 ```
 
@@ -22,7 +22,7 @@ hint: did you mean `vp run dev`?
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this is a Nuxt project (nuxt.config.ts), but `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts), but `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run build`?
 ```
 
@@ -35,7 +35,7 @@ the refusal reaches the enclosing package from a subdirectory, like `vp run` doe
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this is a Nuxt project (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+error: this project uses Nuxt (nuxt.config.ts), but `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
 hint: did you mean `vp run dev`?
 ```
 
@@ -48,7 +48,7 @@ an Astro config triggers the same refusal
 ```
 VITE+ - The Unified Toolchain for the Web
 
-error: this is an Astro project (astro.config.mjs), but `vp dev` runs the bundled Vite CLI, not the Astro CLI.
+error: this project uses Astro (astro.config.mjs), but `vp dev` runs the bundled Vite CLI, not the Astro CLI.
 hint: did you mean `vp run dev`?
 ```
 
