@@ -62,8 +62,11 @@ pub(super) async fn resolve_and_execute(
         SynthesizableSubcommand::Dev { .. } | SynthesizableSubcommand::Preview { .. } => true,
         // `vp doc` runs a long-lived server for `dev`/`preview`; only `build`
         // is batch. A parse error is reported by the resolver below.
-        SynthesizableSubcommand::Doc { args } => super::resolver::parse_doc_args(args)
-            .is_ok_and(|request| request.action != super::types::DocAction::Build),
+        SynthesizableSubcommand::Doc { args } => matches!(
+            vp_doc_cli::parse_doc_args(args),
+            Ok(vp_doc_cli::DocInvocation::Lifecycle(request))
+                if request.action != vp_doc_cli::DocAction::Build
+        ),
         _ => false,
     };
 

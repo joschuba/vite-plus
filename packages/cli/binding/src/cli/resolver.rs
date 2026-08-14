@@ -9,62 +9,8 @@ use vt_str::Str;
 
 use super::{
     help::should_prepend_vitest_run,
-    types::{
-        CliOptions, DocAction, ResolveDocRequest, ResolvedDocCommand, ResolvedSubcommand,
-        ResolvedUniversalViteConfig, SynthesizableSubcommand,
-    },
+    types::{CliOptions, ResolvedSubcommand, ResolvedUniversalViteConfig, SynthesizableSubcommand},
 };
-
-/// Parse `vp doc` arguments per the doc-command RFC. Vite+ consumes
-/// `--provider` only before the lifecycle command; every argument after the
-/// lifecycle command (or after `--`) forwards to the provider verbatim.
-pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocRequest> {
-    let mut provider: Option<String> = None;
-    let mut action = DocAction::Dev;
-    let mut rest: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if arg == "--" {
-            rest.extend(args[i + 1..].iter().cloned());
-            break;
-        } else if arg == "--provider" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| anyhow::anyhow!("`--provider` requires a value"))?;
-            provider = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--provider=") {
-            provider = Some(value.to_string());
-        } else if arg.starts_with('-') {
-            anyhow::bail!(
-                "unexpected option `{arg}` before the doc command\n\nPlace provider options after `dev`, `build`, or `preview`, or after `--`."
-            );
-        } else {
-            action = match arg {
-                "dev" => DocAction::Dev,
-                "build" => DocAction::Build,
-                "preview" => DocAction::Preview,
-                // The JS entry handles `doc init`/`doc info` before delegation;
-                // reaching these arms means a task script or a misordered
-                // invocation.
-                "init" => anyhow::bail!(
-                    "`init` must be the first argument: run `vp doc init [provider]`"
-                ),
-                "info" => anyhow::bail!(
-                    "`info` must be the first argument: run `vp doc info [--json]`"
-                ),
-                other => anyhow::bail!(
-                    "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init, info"
-                ),
-            };
-            rest.extend(args[i + 1..].iter().cloned());
-            break;
-        }
-        i += 1;
-    }
-    Ok(ResolveDocRequest { action, provider, args: rest })
-}
 
 /// Resolves synthesizable subcommands to concrete programs and arguments.
 /// Used by both direct CLI execution and CommandHandler.
@@ -325,34 +271,72 @@ impl SubcommandResolver {
                 })
             }
             SynthesizableSubcommand::Doc { args } => {
-                let cli_options = self.cli_options()?;
-                let request = parse_doc_args(&args)?;
+                let request = match vp_doc_cli::parse_doc_args(&args)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                {
+                    vp_doc_cli::DocInvocation::Lifecycle(request) => request,
+                    // The direct path handles `init`/`info` before resolution;
+                    // reaching these arms means a task script.
+                    vp_doc_cli::DocInvocation::Init { .. } => {
+                        anyhow::bail!("`vp doc init` runs directly, not inside `vp run`")
+                    }
+                    vp_doc_cli::DocInvocation::Info { .. } => {
+                        anyhow::bail!("`vp doc info` runs directly, not inside `vp run`")
+                    }
+                };
                 // Only `doc build` is a cacheable batch operation; the servers
                 // stay uncached like `dev`/`preview`.
                 let cache_config = match request.action {
-                    DocAction::Build => UserCacheConfig::with_config(EnabledCacheConfig {
-                        env: None,
-                        untracked_env: None,
-                        input: None,
-                        output: None,
-                    }),
-                    DocAction::Dev | DocAction::Preview => UserCacheConfig::disabled(),
+                    vp_doc_cli::DocAction::Build => {
+                        UserCacheConfig::with_config(EnabledCacheConfig {
+                            env: None,
+                            untracked_env: None,
+                            input: None,
+                            output: None,
+                        })
+                    }
+                    _ => UserCacheConfig::disabled(),
                 };
-                let request_json = serde_json::to_string(&request)?;
-                let response_json = (cli_options.doc)(request_json).await?;
-                let resolved: ResolvedDocCommand = serde_json::from_str(&response_json)
-                    .inspect_err(|_| {
-                        tracing::error!("Failed to parse doc resolution: {response_json}");
-                    })?;
+                let cwd = vt_path::current_dir().map_err(|e| anyhow::anyhow!("{e}"))?;
+                let resolution = vp_doc_cli::resolve(&request, cwd.as_path())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-                Ok(ResolvedSubcommand {
-                    program: Arc::from(OsStr::new("node")),
-                    args: iter::once(Str::from(resolved.bin_path.as_str()))
-                        .chain(resolved.args.iter().map(|arg| Str::from(arg.as_str())))
-                        .collect(),
-                    cache_config,
-                    envs: merge_resolved_envs(envs, resolved.envs.into_iter().collect()),
-                })
+                match resolution {
+                    vp_doc_cli::DocResolution::PackageBin { bin_path, args } => {
+                        let bin_path_str = bin_path
+                            .to_str()
+                            .ok_or_else(|| anyhow::anyhow!("doc tool path is not valid UTF-8"))?;
+                        Ok(ResolvedSubcommand {
+                            program: Arc::from(OsStr::new("node")),
+                            args: iter::once(Str::from(bin_path_str))
+                                .chain(args.iter().map(|arg| Str::from(arg.as_str())))
+                                .collect(),
+                            cache_config,
+                            envs: merge_resolved_envs(
+                                envs,
+                                vec![("NODE_PACKAGE_MANAGER".to_string(), "vite-plus".to_string())],
+                            ),
+                        })
+                    }
+                    vp_doc_cli::DocResolution::BuiltinVite { args } => {
+                        // The Vite-plugin provider reuses the same resolver as
+                        // the top-level dev/build/preview commands.
+                        let cli_options = self.cli_options()?;
+                        let resolved = (cli_options.vite)().await?;
+                        let js_path = resolved.bin_path;
+                        let js_path_str = js_path
+                            .to_str()
+                            .ok_or_else(|| anyhow::anyhow!("vite JS path is not valid UTF-8"))?;
+                        Ok(ResolvedSubcommand {
+                            program: Arc::from(OsStr::new("node")),
+                            args: iter::once(Str::from(js_path_str))
+                                .chain(args.iter().map(|arg| Str::from(arg.as_str())))
+                                .collect(),
+                            cache_config,
+                            envs: merge_resolved_envs_with_version(envs, resolved.envs),
+                        })
+                    }
+                }
             }
             SynthesizableSubcommand::Check { .. } => {
                 anyhow::bail!(

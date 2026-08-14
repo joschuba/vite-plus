@@ -21,8 +21,8 @@ pub use resolver::SubcommandResolver;
 use rustc_hash::FxHashMap;
 pub(crate) use types::CapturedCommandOutput;
 pub use types::{
-    BoxedResolverFn, CliOptions, DocResolverFn, ResolveCommandResult, SynthesizableSubcommand,
-    ToolchainArgs, ViteConfigResolverFn,
+    BoxedResolverFn, CliOptions, ResolveCommandResult, SynthesizableSubcommand, ToolchainArgs,
+    ViteConfigResolverFn,
 };
 use vp_error::Error;
 pub use vp_shared::init_tracing;
@@ -387,6 +387,21 @@ pub async fn main(
 
     match cli_args {
         CLIArgs::Synthesizable(subcmd) => {
+            // `doc init` and `doc info` are Vite+-owned commands with no tool
+            // to delegate to; they run here instead of the resolver path.
+            // Lifecycle invocations and parse errors fall through so the
+            // resolver reports them.
+            if let SynthesizableSubcommand::Doc { args } = &subcmd {
+                match vp_doc_cli::parse_doc_args(args) {
+                    Ok(vp_doc_cli::DocInvocation::Init { args }) => {
+                        return execute_doc_init(&args, &cwd, options).await;
+                    }
+                    Ok(vp_doc_cli::DocInvocation::Info { json }) => {
+                        return execute_doc_info(json, &cwd);
+                    }
+                    _ => {}
+                }
+            }
             // Only the built-ins can be mistaken for a script. `run`/`cache`
             // below are the script path itself; `install` and friends
             // legitimately trigger a project's `install` lifecycle scripts
@@ -400,6 +415,123 @@ pub async fn main(
         CLIArgs::Exec(exec_args) => crate::exec::execute(exec_args, &cwd).await,
         CLIArgs::Toolchain(args) => execute_toolchain_command(args, options.as_ref()),
     }
+}
+
+/// Execute `vp doc init`: scaffold through `vp_doc_cli`, then install the
+/// provider's dependencies through the normal package-manager dispatch.
+async fn execute_doc_init(
+    args: &[String],
+    cwd: &AbsolutePathBuf,
+    options: Option<CliOptions>,
+) -> Result<ExitStatus, Error> {
+    let outcome = match vp_doc_cli::init_scaffold(args, cwd.as_path()) {
+        Ok(outcome) => outcome,
+        Err(vp_doc_cli::Error::UserMessage(message)) => {
+            eprintln!("error: {message}");
+            return Ok(ExitStatus(1));
+        }
+        Err(error) => return Err(Error::Anyhow(anyhow::Error::new(error))),
+    };
+
+    match outcome {
+        vp_doc_cli::DocInitOutcome::AlreadyConfigured { provider } => {
+            println!(
+                "{} is already set up (`{}` is declared).",
+                provider.display_name, provider.marker
+            );
+            Ok(ExitStatus::SUCCESS)
+        }
+        vp_doc_cli::DocInitOutcome::Scaffolded {
+            provider,
+            other_declared,
+            files,
+            dependencies,
+        } => {
+            if !other_declared.is_empty() {
+                let markers = other_declared
+                    .iter()
+                    .map(|marker| format!("`{marker}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!(
+                    "Note: this project already declares {markers}. Select a provider with `--provider` after init."
+                );
+            }
+            for file in &files {
+                if file.created {
+                    println!("Created {}.", file.path);
+                } else {
+                    println!("Kept existing {}.", file.path);
+                }
+            }
+            println!("Installing {}...", dependencies.join(", "));
+
+            let mut argv: Vec<String> = vec!["vp".into(), "add".into(), "-D".into()];
+            argv.extend(dependencies.iter().map(|dep| (*dep).to_string()));
+            let add = match CLIArgs::try_parse_from(&argv) {
+                Ok(CLIArgs::PackageManager(command)) => command,
+                _ => {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "failed to build the dependency install command"
+                    )));
+                }
+            };
+            let status = execute_pm_command(add, cwd, options.as_ref()).await?;
+            if status.0 != 0 {
+                eprintln!("error: failed to install {}", dependencies.join(", "));
+                return Ok(status);
+            }
+
+            println!("{} is ready. Run `vp doc` to start the dev server.", provider.display_name);
+            Ok(ExitStatus::SUCCESS)
+        }
+    }
+}
+
+/// Execute `vp doc info`: report the resolved provider without starting the
+/// tool.
+fn execute_doc_info(json: bool, cwd: &AbsolutePathBuf) -> Result<ExitStatus, Error> {
+    let report = vp_doc_cli::info_report(cwd.as_path());
+    if json {
+        let rendered = serde_json::to_string_pretty(&report)
+            .map_err(|error| Error::Anyhow(anyhow::Error::new(error)))?;
+        println!("{rendered}");
+    } else if let (Some(provider), Some(display_name), Some(source), Some(target), Some(tool), Some(commands)) = (
+        report.provider,
+        report.display_name,
+        report.source.as_ref(),
+        report.target,
+        report.tool.as_ref(),
+        report.commands.as_ref(),
+    ) {
+        println!("Provider:  {provider} ({display_name})");
+        println!("Source:    dependency marker `{}` in package.json", source.marker);
+        match tool.version.as_deref() {
+            Some(version) => println!("Tool:      {}@{version} ({target})", tool.package),
+            None => println!("Tool:      {} (not installed) ({target})", tool.package),
+        }
+        if tool.version.is_some() && !tool.version_supported {
+            match tool.supported_range {
+                Some(range) => {
+                    println!("Warning:   installed version is unsupported (requires `{range}`)");
+                }
+                None => println!("Warning:   installed version is unsupported"),
+            }
+        }
+        println!("Commands:  {}", commands.join(", "));
+    } else if let Some(candidates) = report.candidates.as_ref() {
+        if candidates.is_empty() {
+            println!(
+                "No documentation provider is configured. Run `vp doc init <provider>` to set one up."
+            );
+        } else {
+            println!(
+                "Multiple documentation providers are declared: {}. Pass `--provider` to lifecycle commands.",
+                candidates.join(", ")
+            );
+        }
+    }
+    Ok(if report.resolved() { ExitStatus::SUCCESS } else { ExitStatus(1) })
 }
 
 /// Execute a package-manager command directly through `vp_pm_cli`,

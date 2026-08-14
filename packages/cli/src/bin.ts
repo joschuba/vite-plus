@@ -14,7 +14,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ensureBlockingStdio, run } from '../binding/index.js';
-import { resolveDoc } from './doc/resolve.ts';
 import { maybePrintCommandHelp } from './help.ts';
 import { applyToolInitConfigToViteConfig, inspectInitCommand } from './init-config.ts';
 import { fmt } from './resolve-fmt.ts';
@@ -119,40 +118,6 @@ if (maybePrintCommandHelp(args)) {
   await import('./version.js');
 } else if (command === 'staged') {
   await import('./staged/bin.js');
-} else if (command === 'doc' && args[1] === 'info') {
-  // `doc info` reports the resolved provider without starting the tool.
-  try {
-    const { runDocInfo } = await import('./doc/info.ts');
-    process.exit(await runDocInfo(args.slice(2)));
-  } catch (err) {
-    errorMsg(getErrorMessage(err));
-    process.exit(1);
-  }
-} else if (command === 'doc' && args[1] === 'init') {
-  // `doc init` is a Vite+-owned command with no tool to delegate to.
-  // The dependency install re-enters the CLI core so the project's package
-  // manager runs through the normal dispatch.
-  try {
-    const { runDocInit } = await import('./doc/init.ts');
-    const exitCode = await runDocInit(args.slice(2), (pmArgs) =>
-      run({
-        lint,
-        pack,
-        fmt,
-        vite,
-        test,
-        doc: resolveDoc,
-        toolchainManifestPath: path.join(cliDistDir, 'toolchain.json'),
-        vitePlusPackagePath,
-        resolveUniversalViteConfig,
-        args: pmArgs,
-      }),
-    );
-    process.exit(exitCode);
-  } catch (err) {
-    errorMsg(getErrorMessage(err));
-    process.exit(1);
-  }
 } else {
   // All other commands — delegate to Rust core via NAPI binding
   try {
@@ -175,7 +140,6 @@ if (maybePrintCommandHelp(args)) {
       fmt,
       vite,
       test,
-      doc: resolveDoc,
       toolchainManifestPath: path.join(cliDistDir, 'toolchain.json'),
       vitePlusPackagePath,
       resolveUniversalViteConfig,

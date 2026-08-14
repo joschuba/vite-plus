@@ -1,0 +1,20 @@
+[package]
+name = "vp_doc_cli"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+rust-version.workspace = true
+
+[dependencies]
+node-semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
