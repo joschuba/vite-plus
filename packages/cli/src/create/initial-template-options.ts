@@ -31,6 +31,11 @@ export function getInitialTemplateOptions(
       value: BuiltinTemplate.library,
       hint: 'Create vite libraries',
     },
+    {
+      label: 'Vite+ Documentation',
+      value: BuiltinTemplate.doc,
+      hint: 'Create a documentation site (VitePress)',
+    },
     // Local templates declared in `create.templates` (vite.config.ts) are only
     // relevant inside the monorepo that owns them. They are selected by `name`
     // and resolved to their `template` specifier in the create flow.

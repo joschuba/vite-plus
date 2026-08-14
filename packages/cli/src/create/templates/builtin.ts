@@ -8,6 +8,7 @@ import type { WorkspaceInfo } from '../../types/index.ts';
 import type { ExecutionWithProjectDir } from '../command.ts';
 import { discoverTemplate } from '../discovery.ts';
 import { setPackageName } from '../utils.ts';
+import { executeDocScaffold } from './doc.ts';
 import { executeGeneratorScaffold } from './generator.ts';
 import { runRemoteTemplateCommand } from './remote.ts';
 import { BuiltinTemplate, type BuiltinTemplateInfo, LibraryTemplateRepo } from './types.ts';
@@ -22,6 +23,10 @@ export async function executeBuiltinTemplate(
 
   if (templateInfo.command === BuiltinTemplate.generator) {
     return await executeGeneratorScaffold(workspaceInfo, templateInfo, options);
+  }
+
+  if (templateInfo.command === BuiltinTemplate.doc) {
+    return await executeDocScaffold(workspaceInfo, templateInfo, options);
   }
 
   if (templateInfo.command === BuiltinTemplate.application) {

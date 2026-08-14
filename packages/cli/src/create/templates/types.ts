@@ -5,6 +5,7 @@ export const BuiltinTemplate = {
   monorepo: 'vite:monorepo',
   application: 'vite:application',
   library: 'vite:library',
+  doc: 'vite:doc',
 } as const;
 export type BuiltinTemplate = (typeof BuiltinTemplate)[keyof typeof BuiltinTemplate];
 
