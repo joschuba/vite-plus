@@ -3375,8 +3375,6 @@ export interface CliOptions {
   vite: (err: Error | null) => Promise<JsCommandResolvedResult>;
   test: (err: Error | null) => Promise<JsCommandResolvedResult>;
   pack: (err: Error | null) => Promise<JsCommandResolvedResult>;
-  /** Doc resolver: `ResolveDocRequest` JSON in, `ResolvedDocCommand` JSON out. */
-  doc: (err: Error | null, arg: string) => Promise<string>;
   cwd?: string;
   /** CLI arguments (should be process.argv.slice(2) from JavaScript) */
   args?: Array<string>;
