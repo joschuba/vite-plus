@@ -19,3 +19,22 @@ steps = [
   { argv = ["vp", "dev", "--config", "vite.config.ts", "--port", "12312312312"], comment = "an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)", continue-on-failure = true },
   { argv = ["vp", "run", "dev"], comment = "`vp run dev` runs the dev script that the refusal points at" },
 ]
+
+# A task or package script can spawn `vp dev` / `vp build` itself, for
+# example a `"nested-build": "vp build"` script. The guard checks direct
+# invocations only, so the nested command runs as invoked.
+[[case]]
+name = "builtin_framework_guard_inside_task"
+vp = "local"
+skip-platforms = ["windows"]
+steps = [
+  { argv = ["vp", "run", "nested-build"], comment = "no refusal: a task-spawned `vp build` runs the bundled Vite build as invoked" },
+]
+
+[[case]]
+name = "builtin_framework_guard_inside_npm_script"
+vp = "local"
+skip-platforms = ["windows"]
+steps = [
+  { argv = ["npm", "run", "nested-build"], comment = "no refusal: an npm-spawned `vp build` runs as invoked" },
+]

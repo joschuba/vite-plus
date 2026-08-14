@@ -7,8 +7,10 @@
 //! nearest `package.json`, the two commands stop with an error and a hint
 //! (voidzero-dev/vite-plus#1506). The hint points at the `package.json`
 //! script that runs the framework command, or at the framework CLI through
-//! `vp exec` when no script matches. An explicit `--config`/`-c` flag
-//! selects a Vite config on purpose, so it skips the refusal.
+//! `vp exec` when no script matches. The guard checks direct invocations
+//! only: a command spawned from a task or package script, for example a
+//! `"dev": "vp dev"` script, runs as invoked. An explicit `--config`/`-c`
+//! flag selects a Vite config on purpose, so it skips the refusal.
 
 use owo_colors::OwoColorize;
 use vp_shared::output;
@@ -81,6 +83,11 @@ pub(super) fn check(
         SynthesizableSubcommand::Build { args } => ("build", args),
         _ => return None,
     };
+    // A task or package script can spawn `vp dev` itself, for example a
+    // `"dev": "vp dev"` script. The nested command runs as invoked.
+    if super::script_note::spawned_from_script() {
+        return None;
+    }
     if has_explicit_config(args) {
         return None;
     }

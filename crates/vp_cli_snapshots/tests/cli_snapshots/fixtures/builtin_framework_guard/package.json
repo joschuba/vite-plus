@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vpt print nuxt build script",
-    "dev": "vpt print nuxt dev script"
+    "dev": "vpt print nuxt dev script",
+    "nested-build": "vp build"
   }
 }
