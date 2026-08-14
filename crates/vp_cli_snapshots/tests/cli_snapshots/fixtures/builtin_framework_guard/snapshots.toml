@@ -12,6 +12,10 @@ steps = [
   { argv = ["vp", "build"], comment = "`vp build` refuses the same way", continue-on-failure = true },
   { argv = ["vp", "dev"], cwd = "src", comment = "the refusal finds the enclosing package from a subdirectory, with the same walk `vp run` uses", continue-on-failure = true },
   { argv = ["vp", "dev"], cwd = "astro", comment = "an Astro config triggers the same refusal", continue-on-failure = true },
+  { argv = ["vp", "dev"], cwd = "no-scripts", comment = "without scripts, the hint points at the framework CLI through `vp exec`", continue-on-failure = true },
+  { argv = ["vp", "build"], cwd = "no-scripts", comment = "`vp build` gets the same fallback hint", continue-on-failure = true },
+  { argv = ["vp", "dev"], cwd = "renamed-script", comment = "a script that runs the framework dev command under another name becomes the hint target", continue-on-failure = true },
+  { argv = ["vp", "build"], cwd = "renamed-script", comment = "the build hint finds the renamed build script the same way", continue-on-failure = true },
   { argv = ["vp", "dev", "--config", "vite.config.ts", "--port", "12312312312"], comment = "an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)", continue-on-failure = true },
   { argv = ["vp", "run", "dev"], comment = "`vp run dev` runs the dev script that the refusal points at" },
 ]

@@ -44,6 +44,50 @@ error: this project uses Astro (astro.config.mjs). `vp dev` runs the bundled Vit
 hint: did you mean `vp run dev`?
 ```
 
+## `cd no-scripts && vp dev`
+
+without scripts, the hint points at the framework CLI through `vp exec`
+
+**Exit code:** 1
+
+```
+error: this project uses Nuxt (nuxt.config.ts). `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+hint: run the Nuxt CLI with `vp exec nuxt dev`.
+```
+
+## `cd no-scripts && vp build`
+
+`vp build` gets the same fallback hint
+
+**Exit code:** 1
+
+```
+error: this project uses Nuxt (nuxt.config.ts). `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
+hint: run the Nuxt CLI with `vp exec nuxt build`.
+```
+
+## `cd renamed-script && vp dev`
+
+a script that runs the framework dev command under another name becomes the hint target
+
+**Exit code:** 1
+
+```
+error: this project uses Nuxt (nuxt.config.ts). `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+hint: did you mean `vp run start`? The start script runs `nuxi dev`.
+```
+
+## `cd renamed-script && vp build`
+
+the build hint finds the renamed build script the same way
+
+**Exit code:** 1
+
+```
+error: this project uses Nuxt (nuxt.config.ts). `vp build` runs the bundled Vite CLI, not the Nuxt CLI.
+hint: did you mean `vp run make`? The make script runs `nuxt build`.
+```
+
 ## `vp dev --config vite.config.ts --port 12312312312`
 
 an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)
