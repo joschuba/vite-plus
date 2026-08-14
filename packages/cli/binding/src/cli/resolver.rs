@@ -45,13 +45,17 @@ pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocReques
                 "dev" => DocAction::Dev,
                 "build" => DocAction::Build,
                 "preview" => DocAction::Preview,
-                // The JS entry handles `doc init` before delegation; reaching
-                // this arm means a task script or a misordered invocation.
+                // The JS entry handles `doc init`/`doc info` before delegation;
+                // reaching these arms means a task script or a misordered
+                // invocation.
                 "init" => anyhow::bail!(
                     "`init` must be the first argument: run `vp doc init [provider]`"
                 ),
+                "info" => anyhow::bail!(
+                    "`info` must be the first argument: run `vp doc info [--json]`"
+                ),
                 other => anyhow::bail!(
-                    "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init"
+                    "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init, info"
                 ),
             };
             rest.extend(args[i + 1..].iter().cloned());

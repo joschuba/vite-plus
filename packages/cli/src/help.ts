@@ -1074,6 +1074,7 @@ const commandHelpDocs = {
           { label: 'build', description: 'Build documentation for production' },
           { label: 'preview', description: 'Preview the production build' },
           { label: 'init', description: 'Set up a documentation provider' },
+          { label: 'info', description: 'Report the resolved provider and its capabilities' },
         ],
       },
       {
@@ -1091,6 +1092,7 @@ const commandHelpDocs = {
           '  vp doc build',
           '  vp doc --provider vitepress build',
           '  vp doc init vitepress',
+          '  vp doc info --json',
           '  vp -C packages/docs doc build',
         ],
       },

@@ -119,6 +119,15 @@ if (maybePrintCommandHelp(args)) {
   await import('./version.js');
 } else if (command === 'staged') {
   await import('./staged/bin.js');
+} else if (command === 'doc' && args[1] === 'info') {
+  // `doc info` reports the resolved provider without starting the tool.
+  try {
+    const { runDocInfo } = await import('./doc/info.ts');
+    process.exit(await runDocInfo(args.slice(2)));
+  } catch (err) {
+    errorMsg(getErrorMessage(err));
+    process.exit(1);
+  }
 } else if (command === 'doc' && args[1] === 'init') {
   // `doc init` is a Vite+-owned command with no tool to delegate to.
   // The dependency install re-enters the CLI core so the project's package
