@@ -4,10 +4,33 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     cli::DocRequest,
+    config::DocConfigContext,
     detect::{detect_providers, find_installed_package, find_nearest_manifest},
     error::{Error, user_message},
     providers::{DOC_PROVIDERS, ProviderDefinition, ProviderTarget, init_providers},
 };
+
+/// How the provider was selected (rfcs/doc-command.md, Provider Selection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionSource {
+    /// `--provider <id>` on the command line.
+    Flag,
+    /// `doc.provider` in the selected `vite.config.*`.
+    Config,
+    /// A unique dependency marker in the nearest package manifest.
+    Marker,
+}
+
+impl SelectionSource {
+    /// The subject for the not-installed diagnostic.
+    fn subject(self) -> &'static str {
+        match self {
+            SelectionSource::Flag => "`--provider`",
+            SelectionSource::Config => "`doc.provider`",
+            SelectionSource::Marker => "`vp doc`",
+        }
+    }
+}
 
 /// The translated execution for a lifecycle request.
 #[derive(Debug)]
@@ -29,37 +52,69 @@ fn marker_list() -> String {
         .join("\n")
 }
 
-fn select_provider(request: &DocRequest, cwd: &Path) -> Result<&'static ProviderDefinition, Error> {
-    if let Some(id) = &request.provider {
-        return DOC_PROVIDERS.iter().find(|provider| provider.id == id.as_str()).ok_or_else(|| {
-            let supported =
-                DOC_PROVIDERS.iter().map(|provider| provider.id).collect::<Vec<_>>().join(", ");
-            user_message(format!(
-                "unknown documentation provider `{id}`\n\nSupported providers: {supported}"
-            ))
-        });
+fn lookup_provider(id: &str, subject: &str) -> Result<&'static ProviderDefinition, Error> {
+    DOC_PROVIDERS.iter().find(|provider| provider.id == id).ok_or_else(|| {
+        let supported =
+            DOC_PROVIDERS.iter().map(|provider| provider.id).collect::<Vec<_>>().join(", ");
+        user_message(format!(
+            "{subject} selects unknown documentation provider `{id}`\n\nSupported providers: {supported}"
+        ))
+    })
+}
+
+/// The outcome of provider selection when no rule failed.
+#[derive(Debug)]
+pub enum ProviderSelection {
+    Selected {
+        provider: &'static ProviderDefinition,
+        source: SelectionSource,
+    },
+    /// No flag, no `doc.provider`, and no dependency marker. An interactive
+    /// caller can offer initialization; `resolve` reports
+    /// [`no_provider_message`] instead.
+    NoProvider,
+}
+
+/// The non-interactive no-provider diagnostic (rfcs/doc-command.md).
+pub fn no_provider_message() -> String {
+    let other_init = init_providers()
+        .filter(|provider| provider.id != "vitepress")
+        .map(|provider| format!("`vp doc init {}`", provider.id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "no documentation provider is configured\n\nRun `vp doc init vitepress` to set up VitePress (recommended), or\n{other_init}.\n\nOr add one of these project dependencies yourself:\n{}\n\nIn a workspace, set `defaultPackage.doc` or run `vp -C <dir> doc` from the\ndocumentation package.",
+        marker_list()
+    )
+}
+
+/// Apply the selection order: `--provider`, then `doc.provider`, then a
+/// unique dependency marker in the nearest manifest from `root`.
+pub fn select_provider(
+    request_provider: Option<&str>,
+    context: Option<&DocConfigContext>,
+    root: &Path,
+) -> Result<ProviderSelection, Error> {
+    if let Some(id) = request_provider {
+        let provider = lookup_provider(id, "`--provider`")?;
+        return Ok(ProviderSelection::Selected { provider, source: SelectionSource::Flag });
     }
 
-    let detected = find_nearest_manifest(cwd)
+    if let Some(id) = context.and_then(|context| context.config.provider.as_deref()) {
+        let provider = lookup_provider(id, "`doc.provider`")?;
+        return Ok(ProviderSelection::Selected { provider, source: SelectionSource::Config });
+    }
+
+    let detected = find_nearest_manifest(root)
         .map(|nearest| detect_providers(&nearest.manifest))
         .unwrap_or_default();
     match detected.as_slice() {
-        [] => {
-            let other_init = init_providers()
-                .filter(|provider| provider.id != "vitepress")
-                .map(|provider| format!("`vp doc init {}`", provider.id))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(user_message(format!(
-                "no documentation provider is configured\n\nRun `vp doc init vitepress` to set up VitePress (recommended), or\n{other_init}.\n\nOr add one of these project dependencies yourself:\n{}\n\nIn a workspace, run `vp -C <dir> doc` from the documentation package.",
-                marker_list()
-            )))
-        }
-        [provider] => Ok(provider),
+        [] => Ok(ProviderSelection::NoProvider),
+        [provider] => Ok(ProviderSelection::Selected { provider, source: SelectionSource::Marker }),
         detected => {
             let ids = detected.iter().map(|provider| provider.id).collect::<Vec<_>>().join(", ");
             Err(user_message(format!(
-                "multiple documentation providers are declared: {ids}\n\nPass `--provider` or run the command from the documentation package."
+                "multiple documentation providers are declared: {ids}\n\nSet `doc.provider` in vite.config.ts or pass `--provider`."
             )))
         }
     }
@@ -77,8 +132,15 @@ pub(crate) fn version_satisfies(version: &str, range: &str) -> bool {
 
 /// Resolve a lifecycle request to a concrete execution. Fails with the
 /// user-facing diagnostics from the RFC before any process is created.
-pub fn resolve(request: &DocRequest, cwd: &Path) -> Result<DocResolution, Error> {
-    let provider = select_provider(request, cwd)?;
+pub fn resolve(
+    request: &DocRequest,
+    cwd: &Path,
+    context: Option<&DocConfigContext>,
+) -> Result<DocResolution, Error> {
+    let (provider, source) = match select_provider(request.provider.as_deref(), context, cwd)? {
+        ProviderSelection::Selected { provider, source } => (provider, source),
+        ProviderSelection::NoProvider => return Err(user_message(no_provider_message())),
+    };
 
     if !provider.capabilities.contains(&request.action) {
         let supported = provider
@@ -96,8 +158,10 @@ pub fn resolve(request: &DocRequest, cwd: &Path) -> Result<DocResolution, Error>
 
     let Some(marker) = find_installed_package(provider.marker, cwd) else {
         return Err(user_message(format!(
-            "`vp doc` selects `{}`, but package `{}` is not installed",
-            provider.id, provider.marker
+            "{} selects `{}`, but package `{}` is not installed",
+            source.subject(),
+            provider.id,
+            provider.marker
         )));
     };
 
@@ -145,5 +209,125 @@ pub fn resolve(request: &DocRequest, cwd: &Path) -> Result<DocResolution, Error>
             };
             Ok(DocResolution::PackageBin { bin_path: executable.root.join(bin_relative), args })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path};
+
+    use super::*;
+    use crate::{cli::DocAction, config::DocConfig};
+
+    fn write_manifest(dir: &Path, contents: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("package.json"), contents).unwrap();
+    }
+
+    fn install_vuepress(dir: &Path) {
+        let package_root = dir.join("node_modules/vuepress");
+        fs::create_dir_all(&package_root).unwrap();
+        fs::write(
+            package_root.join("package.json"),
+            r#"{ "name": "vuepress", "version": "2.0.0", "bin": { "vuepress": "bin/vuepress.js" } }"#,
+        )
+        .unwrap();
+    }
+
+    fn context(dir: &Path, provider: Option<&str>) -> DocConfigContext {
+        DocConfigContext {
+            config: DocConfig { provider: provider.map(str::to_string) },
+            config_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn build_request(provider: Option<&str>) -> DocRequest {
+        DocRequest {
+            action: DocAction::Build,
+            provider: provider.map(str::to_string),
+            args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn config_provider_beats_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0", "vuepress": "^2.0.0" } }"#,
+        );
+        install_vuepress(dir.path());
+        let context = context(dir.path(), Some("vuepress"));
+        let resolution = resolve(&build_request(None), dir.path(), Some(&context)).unwrap();
+        let DocResolution::PackageBin { bin_path, args } = resolution else {
+            panic!("expected a package-bin execution");
+        };
+        assert!(bin_path.ends_with("node_modules/vuepress/bin/vuepress.js"));
+        assert_eq!(args, ["build"]);
+    }
+
+    #[test]
+    fn flag_beats_config_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vuepress": "^2.0.0" } }"#);
+        install_vuepress(dir.path());
+        let context = context(dir.path(), Some("vitepress"));
+        let resolution =
+            resolve(&build_request(Some("vuepress")), dir.path(), Some(&context)).unwrap();
+        let DocResolution::PackageBin { bin_path, .. } = resolution else {
+            panic!("expected a package-bin execution");
+        };
+        assert!(bin_path.ends_with("node_modules/vuepress/bin/vuepress.js"));
+    }
+
+    #[test]
+    fn unknown_config_provider_is_a_user_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = context(dir.path(), Some("typedoc"));
+        let error = resolve(&build_request(None), dir.path(), Some(&context)).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("`doc.provider`"), "{message}");
+        assert!(message.contains("typedoc"), "{message}");
+    }
+
+    #[test]
+    fn config_provider_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), "{}");
+        let context = context(dir.path(), Some("vuepress"));
+        let error = resolve(&build_request(None), dir.path(), Some(&context)).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert_eq!(
+            message,
+            "`doc.provider` selects `vuepress`, but package `vuepress` is not installed"
+        );
+    }
+
+    #[test]
+    fn detection_stays_at_the_invocation_directory() {
+        // The workspace-root redirect happens before this crate runs (the
+        // `defaultPackage` `doc` entry, an implicit `-C`), so resolution
+        // never leaves the invocation directory on its own.
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), "{}");
+        let docs = dir.path().join("packages/docs");
+        write_manifest(&docs, r#"{ "devDependencies": { "vuepress": "^2.0.0" } }"#);
+        install_vuepress(&docs);
+        let error = resolve(&build_request(None), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("no documentation provider is configured"), "{message}");
+        assert!(message.contains("`defaultPackage.doc`"), "{message}");
+
+        let resolution = resolve(&build_request(None), &docs, None).unwrap();
+        let DocResolution::PackageBin { bin_path, .. } = resolution else {
+            panic!("expected a package-bin execution");
+        };
+        assert!(bin_path.starts_with(&docs));
     }
 }

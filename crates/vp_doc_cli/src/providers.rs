@@ -37,6 +37,9 @@ pub struct ProviderInit {
     pub dependencies: &'static [&'static str],
     /// Files written only when missing, relative to the effective root.
     pub starter_files: &'static [StarterFile],
+    /// Shown next to the provider in the init select prompt: the UI
+    /// framework pages can embed (rfcs/doc-command.md, Initialization).
+    pub prompt_hint: &'static str,
 }
 
 #[derive(Debug)]
@@ -74,6 +77,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
                 path: "index.md",
                 content: "# Hello VitePress\n\nStart the dev server with `vp doc`.\n",
             }],
+            prompt_hint: "Vue",
         }),
     },
     ProviderDefinition {
@@ -100,6 +104,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
                     content: "<!doctype html>\n<html>\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>Docs</title>\n  </head>\n  <body>\n    <div id=\"app\"></div>\n  </body>\n</html>\n",
                 },
             ],
+            prompt_hint: "Vite plugin",
         }),
     },
     ProviderDefinition {
@@ -118,7 +123,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
     },
 ];
 
-/// Providers that declare init support.
-pub(crate) fn init_providers() -> impl Iterator<Item = &'static ProviderDefinition> {
+/// Providers that declare init support, in prompt order (VitePress first).
+pub fn init_providers() -> impl Iterator<Item = &'static ProviderDefinition> {
     DOC_PROVIDERS.iter().filter(|provider| provider.init.is_some())
 }

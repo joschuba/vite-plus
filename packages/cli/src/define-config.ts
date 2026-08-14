@@ -22,6 +22,24 @@ import type { RunConfig } from './run-config.ts';
 import type { StagedConfig } from './staged-config.ts';
 import { CONFIG_METADATA_ENV, VITEST_VERSION } from './utils/constants.ts';
 
+/**
+ * A documentation provider `vp doc` can select (rfcs/doc-command.md).
+ */
+export type DocProvider = 'vitepress' | 'ox-content' | 'vuepress';
+
+/**
+ * The `doc` block: provider selection for `vp doc`. The workspace-root
+ * package pointer is not a `doc` key; use the `doc` entry of
+ * `defaultPackage` instead.
+ */
+export interface DocConfig {
+  /**
+   * Select the documentation provider ahead of dependency detection.
+   * `--provider` overrides this value.
+   */
+  provider?: DocProvider;
+}
+
 declare module '@voidzero-dev/vite-plus-core' {
   interface UserConfig {
     /**
@@ -56,18 +74,27 @@ declare module '@voidzero-dev/vite-plus-core' {
     /**
      * Default target directory for `vp dev` / `build` / `preview` / `pack`
      * when invoked bare in the directory containing this config (an implicit
-     * `vp -C <dir>`). A string targets all four commands; an object maps
+     * `vp -C <dir>`). A string targets the four app commands; an object maps
      * commands individually, and a command absent from the object falls
-     * through to the normal picker/listing resolution. Paths are relative to
-     * the config file's directory. vp reads them without executing the
-     * config, so this also works at roots with no vite-plus dependency; the
-     * static read is why the values must stay plain string literals.
+     * through to the normal picker/listing resolution. The `doc` entry names
+     * the documentation package for `vp doc` and exists only in the object
+     * form (rfcs/doc-command.md). Paths are relative to the config file's
+     * directory. vp reads them without executing the config, so this also
+     * works at roots with no vite-plus dependency; the static read is why
+     * the values must stay plain string literals.
      */
-    defaultPackage?: string | { dev?: string; build?: string; preview?: string; pack?: string };
+    defaultPackage?:
+      | string
+      | { dev?: string; build?: string; preview?: string; pack?: string; doc?: string };
 
     run?: RunConfig;
 
     staged?: StagedConfig;
+
+    /**
+     * Options for `vp doc` (rfcs/doc-command.md).
+     */
+    doc?: DocConfig;
 
     /**
      * Options for `vp create`.

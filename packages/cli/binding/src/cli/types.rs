@@ -15,6 +15,7 @@ pub(crate) struct ResolvedUniversalViteConfig {
     pub(crate) fmt: Option<serde_json::Value>,
     pub(crate) check: Option<serde_json::Value>,
     pub(crate) run: Option<serde_json::Value>,
+    pub(crate) doc: Option<serde_json::Value>,
 }
 
 /// Result type for resolved commands from JavaScript

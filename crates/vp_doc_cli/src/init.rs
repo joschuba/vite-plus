@@ -49,8 +49,7 @@ pub fn init_scaffold(args: &[String], cwd: &Path) -> Result<DocInitOutcome, Erro
         )));
     };
 
-    let Some(provider) =
-        init_providers().find(|provider| provider.id == provider_id.as_str())
+    let Some(provider) = init_providers().find(|provider| provider.id == provider_id.as_str())
     else {
         return Err(user_message(format!(
             "unknown documentation provider `{provider_id}`\n\n{}",

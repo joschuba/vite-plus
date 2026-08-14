@@ -116,6 +116,7 @@ export async function resolveUniversalViteConfig(err: null | Error, viteConfigCw
       check: config.check,
       run: config.run,
       staged: config.staged,
+      doc: config.doc,
     });
   } catch (resolveErr) {
     console.error('[Vite+] resolve universal vite config error:', resolveErr);

@@ -6,6 +6,7 @@
 //! the caller.
 
 mod cli;
+mod config;
 mod detect;
 mod error;
 mod info;
@@ -14,6 +15,9 @@ mod providers;
 mod resolve;
 
 pub use cli::{DocAction, DocInvocation, DocRequest, parse_doc_args};
+pub use config::{
+    DocConfig, DocConfigContext, StaticDocConfig, load_static_doc_config, parse_doc_config,
+};
 pub use detect::{
     InstalledPackage, NearestManifest, detect_providers, find_installed_package,
     find_nearest_manifest,
@@ -22,6 +26,9 @@ pub use error::Error;
 pub use info::{DocInfoReport, DocSelectionSource, DocToolInfo, info_report};
 pub use init::{DocInitOutcome, ScaffoldedFile, init_scaffold};
 pub use providers::{
-    DOC_PROVIDERS, ProviderDefinition, ProviderInit, ProviderTarget, StarterFile,
+    DOC_PROVIDERS, ProviderDefinition, ProviderInit, ProviderTarget, StarterFile, init_providers,
 };
-pub use resolve::{DocResolution, resolve};
+pub use resolve::{
+    DocResolution, ProviderSelection, SelectionSource, no_provider_message, resolve,
+    select_provider,
+};

@@ -61,14 +61,17 @@ impl SubcommandResolver {
         })?)
     }
 
-    /// Resolve a synthesizable subcommand to a concrete program, args, cache config, and envs.
+    /// Resolve a synthesizable subcommand to a concrete program, args, cache
+    /// config, and envs. `cwd` is the execution directory the caller settled
+    /// on (after `-C` and elicitation); the doc arm anchors detection there.
     pub(super) async fn resolve(
         &self,
         subcommand: SynthesizableSubcommand,
         resolved_vite_config: Option<&ResolvedUniversalViteConfig>,
         envs: &Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
+        cwd: &AbsolutePath,
     ) -> anyhow::Result<ResolvedSubcommand> {
-        self.resolve_inner(subcommand, resolved_vite_config, envs).await
+        self.resolve_inner(subcommand, resolved_vite_config, envs, cwd).await
     }
 
     async fn resolve_inner(
@@ -76,6 +79,7 @@ impl SubcommandResolver {
         subcommand: SynthesizableSubcommand,
         resolved_vite_config: Option<&ResolvedUniversalViteConfig>,
         envs: &Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
+        cwd: &AbsolutePath,
     ) -> anyhow::Result<ResolvedSubcommand> {
         match subcommand {
             SynthesizableSubcommand::Lint { mut args } => {
@@ -271,19 +275,18 @@ impl SubcommandResolver {
                 })
             }
             SynthesizableSubcommand::Doc { args } => {
-                let request = match vp_doc_cli::parse_doc_args(&args)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-                {
-                    vp_doc_cli::DocInvocation::Lifecycle(request) => request,
-                    // The direct path handles `init`/`info` before resolution;
-                    // reaching these arms means a task script.
-                    vp_doc_cli::DocInvocation::Init { .. } => {
-                        anyhow::bail!("`vp doc init` runs directly, not inside `vp run`")
-                    }
-                    vp_doc_cli::DocInvocation::Info { .. } => {
-                        anyhow::bail!("`vp doc info` runs directly, not inside `vp run`")
-                    }
-                };
+                let request =
+                    match vp_doc_cli::parse_doc_args(&args).map_err(|e| anyhow::anyhow!("{e}"))? {
+                        vp_doc_cli::DocInvocation::Lifecycle(request) => request,
+                        // The direct path handles `init`/`info` before resolution;
+                        // reaching these arms means a task script.
+                        vp_doc_cli::DocInvocation::Init { .. } => {
+                            anyhow::bail!("`vp doc init` runs directly, not inside `vp run`")
+                        }
+                        vp_doc_cli::DocInvocation::Info { .. } => {
+                            anyhow::bail!("`vp doc info` runs directly, not inside `vp run`")
+                        }
+                    };
                 // Only `doc build` is a cacheable batch operation; the servers
                 // stay uncached like `dev`/`preview`.
                 let cache_config = match request.action {
@@ -297,8 +300,8 @@ impl SubcommandResolver {
                     }
                     _ => UserCacheConfig::disabled(),
                 };
-                let cwd = vt_path::current_dir().map_err(|e| anyhow::anyhow!("{e}"))?;
-                let resolution = vp_doc_cli::resolve(&request, cwd.as_path())
+                let context = load_doc_context(cwd.as_path(), self.cli_options.as_ref()).await?;
+                let resolution = vp_doc_cli::resolve(&request, cwd.as_path(), context.as_ref())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 match resolution {
@@ -343,6 +346,39 @@ impl SubcommandResolver {
                     "Check is a composite command and cannot be resolved to a single subcommand"
                 );
             }
+        }
+    }
+}
+
+/// Load the `doc` configuration context for the invocation directory: static
+/// extraction first, then the JavaScript config resolver for non-static
+/// configs. Without a JavaScript resolver, a non-static `doc` field falls
+/// back to dependency detection.
+pub(super) async fn load_doc_context(
+    cwd: &std::path::Path,
+    cli_options: Option<&CliOptions>,
+) -> anyhow::Result<Option<vp_doc_cli::DocConfigContext>> {
+    match vp_doc_cli::load_static_doc_config(cwd).map_err(anyhow::Error::new)? {
+        vp_doc_cli::StaticDocConfig::Missing => Ok(None),
+        vp_doc_cli::StaticDocConfig::Resolved(context) => Ok(Some(context)),
+        vp_doc_cli::StaticDocConfig::NonStatic { config_dir } => {
+            let Some(cli_options) = cli_options else {
+                return Ok(None);
+            };
+            let dir = config_dir
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("config directory is not valid UTF-8"))?
+                .to_string();
+            let config_json = (cli_options.resolve_universal_vite_config)(dir).await?;
+            let resolved: ResolvedUniversalViteConfig = serde_json::from_str(&config_json)
+                .inspect_err(|_| {
+                    tracing::error!("Failed to parse vite config: {config_json}");
+                })?;
+            let config = match resolved.doc {
+                Some(value) => vp_doc_cli::parse_doc_config(value).map_err(anyhow::Error::new)?,
+                None => vp_doc_cli::DocConfig::default(),
+            };
+            Ok(Some(vp_doc_cli::DocConfigContext { config, config_dir }))
         }
     }
 }

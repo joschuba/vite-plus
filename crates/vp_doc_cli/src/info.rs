@@ -5,16 +5,19 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::{
-    detect::{detect_providers, find_installed_package, find_nearest_manifest},
+    config::DocConfigContext,
+    detect::find_installed_package,
+    error::Error,
     providers::ProviderDefinition,
-    resolve,
+    resolve::{self, SelectionSource},
 };
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocSelectionSource {
     pub kind: &'static str,
-    pub marker: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,17 +56,28 @@ impl DocInfoReport {
     }
 }
 
-fn build_report(provider: &'static ProviderDefinition, cwd: &Path) -> DocInfoReport {
-    let installed = find_installed_package(provider.marker, cwd);
+fn build_report(
+    provider: &'static ProviderDefinition,
+    source: SelectionSource,
+    root: &Path,
+) -> DocInfoReport {
+    let installed = find_installed_package(provider.marker, root);
     let version = installed.as_ref().and_then(|package| package.version()).map(str::to_string);
     let version_supported = version.as_deref().is_some_and(|version| {
         provider.version_range.is_none_or(|range| resolve::version_satisfies(version, range))
     });
+    let source = match source {
+        SelectionSource::Config => DocSelectionSource { kind: "config", marker: None },
+        // `info` takes no `--provider`; a flag source cannot occur here.
+        SelectionSource::Flag | SelectionSource::Marker => {
+            DocSelectionSource { kind: "dependency-marker", marker: Some(provider.marker) }
+        }
+    };
 
     DocInfoReport {
         provider: Some(provider.id),
         display_name: Some(provider.display_name),
-        source: Some(DocSelectionSource { kind: "dependency-marker", marker: provider.marker }),
+        source: Some(source),
         target: Some(provider.target.as_str()),
         tool: Some(DocToolInfo {
             package: provider.marker,
@@ -76,22 +90,36 @@ fn build_report(provider: &'static ProviderDefinition, cwd: &Path) -> DocInfoRep
     }
 }
 
-/// Build the info report from the effective root. Reads only manifests.
-pub fn info_report(cwd: &Path) -> DocInfoReport {
-    let detected = find_nearest_manifest(cwd)
-        .map(|nearest| detect_providers(&nearest.manifest))
-        .unwrap_or_default();
-
-    match detected.as_slice() {
-        [provider] => build_report(provider, cwd),
-        detected => DocInfoReport {
+/// Build the info report from the effective root. Reads only manifests and
+/// the statically extracted config. An invalid `doc.provider` value is a
+/// user error, the same as in the lifecycle commands.
+pub fn info_report(cwd: &Path, context: Option<&DocConfigContext>) -> Result<DocInfoReport, Error> {
+    match resolve::select_provider(None, context, cwd) {
+        Ok(resolve::ProviderSelection::Selected { provider, source }) => {
+            Ok(build_report(provider, source, cwd))
+        }
+        Err(Error::UserMessage(message))
+            if context.is_some_and(|context| context.config.provider.is_some()) =>
+        {
+            Err(Error::UserMessage(message))
+        }
+        Ok(resolve::ProviderSelection::NoProvider) | Err(_) => Ok(DocInfoReport {
             provider: None,
             display_name: None,
             source: None,
             target: None,
             tool: None,
             commands: None,
-            candidates: Some(detected.iter().map(|provider| provider.id).collect()),
-        },
+            candidates: Some(detected_candidates(cwd)),
+        }),
     }
+}
+
+fn detected_candidates(root: &Path) -> Vec<&'static str> {
+    crate::detect::find_nearest_manifest(root)
+        .map(|nearest| crate::detect::detect_providers(&nearest.manifest))
+        .unwrap_or_default()
+        .iter()
+        .map(|provider| provider.id)
+        .collect()
 }

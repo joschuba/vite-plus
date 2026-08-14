@@ -233,6 +233,44 @@ fn resolve_default_package(
     }
 }
 
+/// The `defaultPackage` value that applies to `vp doc` at this directory,
+/// or `None` when no redirect applies: not at the invocation root, no
+/// declaration, or the string form (which covers the app commands only,
+/// never `doc`). A declared but non-static value passes through so the
+/// resolver can report it loudly, like the app commands.
+fn classify_doc(cwd: &AbsolutePath) -> Option<vp_static_config::FieldValue> {
+    let at_invocation_root = vt_workspace::find_workspace_root(cwd)
+        .as_ref()
+        .map_or(true, |(_, rel_from_root)| rel_from_root.as_str().is_empty());
+    if !at_invocation_root {
+        return None;
+    }
+    match vp_static_config::resolve_static_config(cwd).get_declared("defaultPackage")? {
+        vp_static_config::FieldValue::Json(serde_json::Value::Object(map)) => {
+            map.get("doc").cloned().map(vp_static_config::FieldValue::Json)
+        }
+        vp_static_config::FieldValue::Json(_) => None,
+        non_static @ vp_static_config::FieldValue::NonStatic => Some(non_static),
+    }
+}
+
+/// The `defaultPackage` `doc` entry (rfcs/doc-command.md): at the invocation
+/// root, every `vp doc` subcommand behaves as an implicit `-C` into the
+/// named documentation package. Reuses the app commands' value resolution,
+/// note line included.
+pub(super) fn resolve_doc_target(cwd: &AbsolutePath) -> AppTarget {
+    match classify_doc(cwd) {
+        Some(value) => resolve_default_package("doc", cwd, value),
+        None => AppTarget::CurrentDir,
+    }
+}
+
+/// Pure predicate for the vp-script interception: would [`resolve_doc_target`]
+/// redirect or error at this directory? Never prints.
+pub(super) fn doc_needs_elicitation(cwd: &AbsolutePath) -> bool {
+    classify_doc(cwd).is_some()
+}
+
 /// Fuzzy package picker on `vt_select`, the same component behind the
 /// `vp run` task selector. Returns the selected row index, or `None` on
 /// Ctrl+C. When the PTY snapshot runner sets `VP_EMIT_MILESTONES=1`, every
@@ -292,7 +330,7 @@ fn run_package_picker(command: &str, rows: &[PackageRow]) -> Result<Option<usize
 /// production), so the sequence is written by hand. A fresh random id per
 /// emission keeps repeated milestones with the same name observable as
 /// distinct title changes through Windows ConPTY.
-fn emit_milestone_title(name: &str) {
+pub(super) fn emit_milestone_title(name: &str) {
     use std::io::Write as _;
     let id = uuid::Uuid::new_v4();
     let encoded_name = base64_simd::URL_SAFE_NO_PAD.encode_to_string(name.as_bytes());

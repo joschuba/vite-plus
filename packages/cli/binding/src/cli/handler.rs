@@ -93,10 +93,15 @@ impl CommandHandler for VitePlusCommandHandler {
                 // target elicitation as direct invocations: spawn the real
                 // binary, which elicits (defaultPackage note, listing +
                 // exit 1) identically instead of silently running the root.
-                if super::app_target::needs_elicitation(&subcmd, &command.cwd) {
+                // `vp doc` scripts do the same when a `defaultPackage` `doc`
+                // entry redirects at the script's directory.
+                let doc_elicits = matches!(&subcmd, SynthesizableSubcommand::Doc { .. })
+                    && super::app_target::doc_needs_elicitation(&command.cwd);
+                if doc_elicits || super::app_target::needs_elicitation(&subcmd, &command.cwd) {
                     return Ok(HandledCommand::Verbatim);
                 }
-                let resolved = self.resolver.resolve(subcmd, None, &command.envs).await?;
+                let resolved =
+                    self.resolver.resolve(subcmd, None, &command.envs, &command.cwd).await?;
                 Ok(HandledCommand::Synthesized(resolved.into_synthetic_plan_request()))
             }
             CLIArgs::ViteTask(cmd) => Ok(HandledCommand::ViteTaskCommand(cmd)),
