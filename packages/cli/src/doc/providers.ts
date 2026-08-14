@@ -1,40 +1,40 @@
 /**
- * Data-only registry of documentation backends for `vp doc`.
+ * Data-only registry of documentation providers for `vp doc`.
  *
  * PoC scope (rfcs/doc-command.md): VitePress 2 as a package-bin target and
- * Ox Content as the built-in Vite target. The remaining RFC backends join by
+ * Ox Content as the built-in Vite target. The remaining RFC providers join by
  * adding entries here; detection and resolution stay generic.
  */
 
-export type DocBackendId = 'vitepress' | 'ox-content';
+export type DocProviderId = 'vitepress' | 'ox-content';
 
-export type DocBackendTarget =
+export type DocProviderTarget =
   | { kind: 'package-bin'; packageName: string; binName: string }
   | { kind: 'builtin-vite' };
 
-export interface DocBackendInit {
+export interface DocProviderInit {
   /** Dependency specs added through the project's package manager. */
   dependencies: string[];
   /** Files written only when missing, relative to the effective root. */
   starterFiles: { path: string; content: string }[];
 }
 
-export interface DocBackendAdapter {
-  id: DocBackendId;
+export interface DocProviderDefinition {
+  id: DocProviderId;
   /** Human name used in diagnostics. */
   displayName: string;
-  /** Declared dependency that selects this backend. */
+  /** Declared dependency that selects this provider. */
   marker: string;
-  /** Extra hint rendered next to the marker in the no-backend error. */
+  /** Extra hint rendered next to the marker in the no-provider error. */
   markerHint?: string;
   /** Supported semver range for the marker package, checked before execution. */
   versionRange?: string;
-  target: DocBackendTarget;
+  target: DocProviderTarget;
   /** One-command setup support for `vp doc init`. */
-  init?: DocBackendInit;
+  init?: DocProviderInit;
 }
 
-export const DOC_BACKENDS: readonly DocBackendAdapter[] = [
+export const DOC_PROVIDERS: readonly DocProviderDefinition[] = [
   {
     id: 'vitepress',
     displayName: 'VitePress 2',

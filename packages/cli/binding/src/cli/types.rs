@@ -139,7 +139,7 @@ pub type BoxedResolverFn =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<ResolveCommandResult>> + 'static>>>;
 
 /// Doc resolver function: `ResolveDocRequest` JSON in, `ResolvedDocCommand`
-/// JSON out. The JS side owns backend detection and package resolution.
+/// JSON out. The JS side owns provider detection and package resolution.
 pub type DocResolverFn =
     Box<dyn Fn(String) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + 'static>>>;
 
@@ -158,7 +158,7 @@ pub(crate) enum DocAction {
 pub(crate) struct ResolveDocRequest {
     pub(crate) action: DocAction,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend: Option<String>,
+    pub(crate) provider: Option<String>,
     pub(crate) args: Vec<String>,
 }
 

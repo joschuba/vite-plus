@@ -16,10 +16,10 @@ use super::{
 };
 
 /// Parse `vp doc` arguments per the doc-command RFC. Vite+ consumes
-/// `--backend` only before the lifecycle command; every argument after the
-/// lifecycle command (or after `--`) forwards to the backend verbatim.
+/// `--provider` only before the lifecycle command; every argument after the
+/// lifecycle command (or after `--`) forwards to the provider verbatim.
 pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocRequest> {
-    let mut backend: Option<String> = None;
+    let mut provider: Option<String> = None;
     let mut action = DocAction::Dev;
     let mut rest: Vec<String> = Vec::new();
     let mut i = 0;
@@ -28,17 +28,17 @@ pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocReques
         if arg == "--" {
             rest.extend(args[i + 1..].iter().cloned());
             break;
-        } else if arg == "--backend" {
+        } else if arg == "--provider" {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| anyhow::anyhow!("`--backend` requires a value"))?;
-            backend = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--backend=") {
-            backend = Some(value.to_string());
+                .ok_or_else(|| anyhow::anyhow!("`--provider` requires a value"))?;
+            provider = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--provider=") {
+            provider = Some(value.to_string());
         } else if arg.starts_with('-') {
             anyhow::bail!(
-                "unexpected option `{arg}` before the doc command\n\nPlace backend options after `dev`, `build`, or `preview`, or after `--`."
+                "unexpected option `{arg}` before the doc command\n\nPlace provider options after `dev`, `build`, or `preview`, or after `--`."
             );
         } else {
             action = match arg {
@@ -48,7 +48,7 @@ pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocReques
                 // The JS entry handles `doc init` before delegation; reaching
                 // this arm means a task script or a misordered invocation.
                 "init" => anyhow::bail!(
-                    "`init` must be the first argument: run `vp doc init [backend]`"
+                    "`init` must be the first argument: run `vp doc init [provider]`"
                 ),
                 other => anyhow::bail!(
                     "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init"
@@ -59,7 +59,7 @@ pub(crate) fn parse_doc_args(args: &[String]) -> anyhow::Result<ResolveDocReques
         }
         i += 1;
     }
-    Ok(ResolveDocRequest { action, backend, args: rest })
+    Ok(ResolveDocRequest { action, provider, args: rest })
 }
 
 /// Resolves synthesizable subcommands to concrete programs and arguments.

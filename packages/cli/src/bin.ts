@@ -120,7 +120,7 @@ if (maybePrintCommandHelp(args)) {
 } else if (command === 'staged') {
   await import('./staged/bin.js');
 } else if (command === 'doc' && args[1] === 'init') {
-  // `doc init` is a Vite+-owned command with no backend to delegate to.
+  // `doc init` is a Vite+-owned command with no tool to delegate to.
   // The dependency install re-enters the CLI core so the project's package
   // manager runs through the normal dispatch.
   try {

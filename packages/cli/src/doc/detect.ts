@@ -1,15 +1,15 @@
 /**
- * Backend detection for `vp doc` (rfcs/doc-command.md).
+ * Provider detection for `vp doc` (rfcs/doc-command.md).
  *
  * Detection only reads declared dependencies from the nearest package
- * manifest. It never selects a backend because a transitive package happens
+ * manifest. It never selects a provider because a transitive package happens
  * to resolve from node_modules.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { DOC_BACKENDS, type DocBackendAdapter } from './backends.ts';
+import { DOC_PROVIDERS, type DocProviderDefinition } from './providers.ts';
 
 const DEPENDENCY_FIELDS = [
   'dependencies',
@@ -36,7 +36,7 @@ export function findNearestManifest(
       try {
         return { dir, manifest: JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) };
       } catch {
-        // A malformed manifest cannot declare a backend; keep walking up.
+        // A malformed manifest cannot declare a provider; keep walking up.
       }
     }
     const parent = path.dirname(dir);
@@ -47,12 +47,12 @@ export function findNearestManifest(
   }
 }
 
-/** Backends whose marker appears in the manifest's declared dependency fields. */
-export function detectBackends(manifest: PackageManifest): DocBackendAdapter[] {
-  return DOC_BACKENDS.filter((backend) =>
+/** Providers whose marker appears in the manifest's declared dependency fields. */
+export function detectProviders(manifest: PackageManifest): DocProviderDefinition[] {
+  return DOC_PROVIDERS.filter((provider) =>
     DEPENDENCY_FIELDS.some((field) => {
       const deps = manifest[field];
-      return typeof deps === 'object' && deps !== null && backend.marker in deps;
+      return typeof deps === 'object' && deps !== null && provider.marker in deps;
     }),
   );
 }

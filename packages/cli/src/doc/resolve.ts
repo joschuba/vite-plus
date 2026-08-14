@@ -1,8 +1,8 @@
 /**
- * Backend resolution for `vp doc` (rfcs/doc-command.md).
+ * Provider resolution for `vp doc` (rfcs/doc-command.md).
  *
  * The Rust side owns command parsing and sends a request JSON through the
- * NAPI resolver callback. This module selects the backend, validates the
+ * NAPI resolver callback. This module selects the provider, validates the
  * installed package, and returns the translated execution as JSON. Thrown
  * error messages are the user-facing diagnostics.
  */
@@ -13,45 +13,45 @@ import semver from 'semver';
 
 import { vite } from '../resolve-vite.ts';
 import { DEFAULT_ENVS } from '../utils/constants.ts';
-import { DOC_BACKENDS, type DocBackendAdapter, type DocBackendId } from './backends.ts';
-import { detectBackends, findInstalledPackage, findNearestManifest } from './detect.ts';
+import { DOC_PROVIDERS, type DocProviderDefinition, type DocProviderId } from './providers.ts';
+import { detectProviders, findInstalledPackage, findNearestManifest } from './detect.ts';
 
 interface ResolveDocRequest {
   action: 'dev' | 'build' | 'preview';
-  backend?: string;
+  provider?: string;
   args: string[];
 }
 
 interface ResolvedDocCommand {
-  backend: DocBackendId;
+  provider: DocProviderId;
   binPath: string;
   args: string[];
   envs: Record<string, string>;
 }
 
 function markerList(): string {
-  return DOC_BACKENDS.map(
-    (backend) => `  ${backend.marker}${backend.markerHint ? ` (${backend.markerHint})` : ''}`,
+  return DOC_PROVIDERS.map(
+    (provider) => `  ${provider.marker}${provider.markerHint ? ` (${provider.markerHint})` : ''}`,
   ).join('\n');
 }
 
-function selectBackend(request: ResolveDocRequest, cwd: string): DocBackendAdapter {
-  if (request.backend) {
-    const backend = DOC_BACKENDS.find((candidate) => candidate.id === request.backend);
-    if (!backend) {
+function selectProvider(request: ResolveDocRequest, cwd: string): DocProviderDefinition {
+  if (request.provider) {
+    const provider = DOC_PROVIDERS.find((candidate) => candidate.id === request.provider);
+    if (!provider) {
       throw new Error(
-        `unknown documentation backend \`${request.backend}\`\n\n` +
-          `Supported backends: ${DOC_BACKENDS.map((candidate) => candidate.id).join(', ')}`,
+        `unknown documentation provider \`${request.provider}\`\n\n` +
+          `Supported providers: ${DOC_PROVIDERS.map((candidate) => candidate.id).join(', ')}`,
       );
     }
-    return backend;
+    return provider;
   }
 
   const nearest = findNearestManifest(cwd);
-  const detected = nearest ? detectBackends(nearest.manifest) : [];
+  const detected = nearest ? detectProviders(nearest.manifest) : [];
   if (detected.length === 0) {
     throw new Error(
-      'no documentation backend is configured\n\n' +
+      'no documentation provider is configured\n\n' +
         'Run `vp doc init vitepress` to set up VitePress (recommended), or\n' +
         '`vp doc init ox-content`.\n\n' +
         `Or add one of these project dependencies yourself:\n${markerList()}\n\n` +
@@ -60,10 +60,10 @@ function selectBackend(request: ResolveDocRequest, cwd: string): DocBackendAdapt
   }
   if (detected.length > 1) {
     throw new Error(
-      `multiple documentation backends are declared: ${detected
-        .map((backend) => backend.id)
+      `multiple documentation providers are declared: ${detected
+        .map((provider) => provider.id)
         .join(', ')}\n\n` +
-        'Pass `--backend` or run the command from the documentation package.',
+        'Pass `--provider` or run the command from the documentation package.',
     );
   }
   return detected[0];
@@ -80,53 +80,53 @@ export async function resolveDoc(err: null | Error, requestJson: string): Promis
 
   const request: ResolveDocRequest = JSON.parse(requestJson);
   const cwd = process.cwd();
-  const backend = selectBackend(request, cwd);
+  const provider = selectProvider(request, cwd);
 
-  const marker = findInstalledPackage(backend.marker, cwd);
+  const marker = findInstalledPackage(provider.marker, cwd);
   if (!marker) {
     throw new Error(
-      `\`vp doc\` selects \`${backend.id}\`, but package \`${backend.marker}\` is not installed`,
+      `\`vp doc\` selects \`${provider.id}\`, but package \`${provider.marker}\` is not installed`,
     );
   }
 
-  if (backend.versionRange) {
+  if (provider.versionRange) {
     const version = marker.packageJson.version;
     if (
       !version ||
-      !semver.satisfies(version, backend.versionRange, { includePrerelease: true })
+      !semver.satisfies(version, provider.versionRange, { includePrerelease: true })
     ) {
       throw new Error(
-        `\`vp doc\` supports ${backend.displayName}, but found ${backend.marker}@${version ?? 'unknown'}\n\n` +
-          `Install a ${backend.displayName} release (\`${backend.versionRange}\`).`,
+        `\`vp doc\` supports ${provider.displayName}, but found ${provider.marker}@${version ?? 'unknown'}\n\n` +
+          `Install a ${provider.displayName} release (\`${provider.versionRange}\`).`,
       );
     }
   }
 
   let resolved: ResolvedDocCommand;
-  if (backend.target.kind === 'builtin-vite') {
-    // The Vite-plugin backend participates in the normal Vite pipeline, so it
+  if (provider.target.kind === 'builtin-vite') {
+    // The Vite-plugin provider participates in the normal Vite pipeline, so it
     // reuses the same resolver as the top-level dev/build/preview commands.
     const { binPath, envs } = await vite();
-    resolved = { backend: backend.id, binPath, args: [request.action, ...request.args], envs };
+    resolved = { provider: provider.id, binPath, args: [request.action, ...request.args], envs };
   } else {
     const executable =
-      backend.target.packageName === backend.marker
+      provider.target.packageName === provider.marker
         ? marker
-        : findInstalledPackage(backend.target.packageName, cwd);
+        : findInstalledPackage(provider.target.packageName, cwd);
     if (!executable) {
       throw new Error(
-        `backend \`${backend.id}\` executes \`${backend.target.packageName}\`, but that package is not installed`,
+        `provider \`${provider.id}\` executes \`${provider.target.packageName}\`, but that package is not installed`,
       );
     }
     const bin = executable.packageJson.bin;
-    const binRelative = typeof bin === 'string' ? bin : bin?.[backend.target.binName];
+    const binRelative = typeof bin === 'string' ? bin : bin?.[provider.target.binName];
     if (!binRelative) {
       throw new Error(
-        `package \`${backend.target.packageName}\` does not declare a \`${backend.target.binName}\` bin`,
+        `package \`${provider.target.packageName}\` does not declare a \`${provider.target.binName}\` bin`,
       );
     }
     resolved = {
-      backend: backend.id,
+      provider: provider.id,
       binPath: path.join(executable.root, binRelative),
       args: [request.action, ...request.args],
       envs: { ...DEFAULT_ENVS },

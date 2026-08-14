@@ -1061,10 +1061,10 @@ const commandHelpDocs = {
     documentationUrl: 'https://viteplus.dev/guide/vpx',
   },
   doc: {
-    usage: 'vp doc [OPTIONS] [COMMAND] [BACKEND_ARGS]...',
+    usage: 'vp doc [OPTIONS] [COMMAND] [TOOL_ARGS]...',
     summary: [
-      "Run the project's documentation backend.",
-      'Arguments after the command are forwarded to the backend.',
+      "Run the project's documentation tool through its provider.",
+      'Arguments after the command are forwarded to the tool.',
     ],
     sections: [
       {
@@ -1073,13 +1073,13 @@ const commandHelpDocs = {
           { label: 'dev', description: 'Start the documentation development server [default]' },
           { label: 'build', description: 'Build documentation for production' },
           { label: 'preview', description: 'Preview the production build' },
-          { label: 'init', description: 'Set up a documentation backend' },
+          { label: 'init', description: 'Set up a documentation provider' },
         ],
       },
       {
         title: 'Options',
         rows: [
-          { label: '--backend <BACKEND>', description: 'Select the backend for this invocation' },
+          { label: '--provider <PROVIDER>', description: 'Select the provider for this invocation' },
           { label: '-h, --help', description: 'Print help' },
         ],
       },
@@ -1089,7 +1089,7 @@ const commandHelpDocs = {
           '  vp doc',
           '  vp doc dev --host 0.0.0.0',
           '  vp doc build',
-          '  vp doc --backend vitepress build',
+          '  vp doc --provider vitepress build',
           '  vp doc init vitepress',
           '  vp -C packages/docs doc build',
         ],

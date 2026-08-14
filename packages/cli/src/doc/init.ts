@@ -1,26 +1,26 @@
 /**
- * `vp doc init <backend>` for the doc-command PoC (rfcs/doc-command.md).
+ * `vp doc init <provider>` for the doc-command PoC (rfcs/doc-command.md).
  *
- * Scaffolds the backend's starter files (never overwrites) and adds its
+ * Scaffolds the provider's starter files (never overwrites) and adds its
  * dependencies through the normal Vite+ package-manager dispatch. The
- * interactive backend select from the RFC is not part of the PoC; the
- * backend ID is required.
+ * interactive provider select from the RFC is not part of the PoC; the
+ * provider ID is required.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { accent, errorMsg, log } from '../utils/terminal.ts';
-import { DOC_BACKENDS, type DocBackendAdapter } from './backends.ts';
-import { detectBackends, findNearestManifest } from './detect.ts';
+import { DOC_PROVIDERS, type DocProviderDefinition } from './providers.ts';
+import { detectProviders, findNearestManifest } from './detect.ts';
 
-const INIT_BACKENDS = DOC_BACKENDS.filter(
-  (backend): backend is DocBackendAdapter & { init: NonNullable<DocBackendAdapter['init']> } =>
-    backend.init !== undefined,
+const INIT_PROVIDERS = DOC_PROVIDERS.filter(
+  (provider): provider is DocProviderDefinition & { init: NonNullable<DocProviderDefinition['init']> } =>
+    provider.init !== undefined,
 );
 
 function initUsage(): string {
-  return `Usage: vp doc init <${INIT_BACKENDS.map((backend) => backend.id).join('|')}>`;
+  return `Usage: vp doc init <${INIT_PROVIDERS.map((provider) => provider.id).join('|')}>`;
 }
 
 /**
@@ -32,34 +32,34 @@ export async function runDocInit(
   argv: string[],
   runPm: (args: string[]) => Promise<number>,
 ): Promise<number> {
-  const backendId = argv[0];
-  if (!backendId || backendId.startsWith('-')) {
-    errorMsg(`\`vp doc init\` requires a backend ID\n\n${initUsage()}`);
+  const providerId = argv[0];
+  if (!providerId || providerId.startsWith('-')) {
+    errorMsg(`\`vp doc init\` requires a provider ID\n\n${initUsage()}`);
     return 1;
   }
 
-  const backend = INIT_BACKENDS.find((candidate) => candidate.id === backendId);
-  if (!backend) {
-    errorMsg(`unknown documentation backend \`${backendId}\`\n\n${initUsage()}`);
+  const provider = INIT_PROVIDERS.find((candidate) => candidate.id === providerId);
+  if (!provider) {
+    errorMsg(`unknown documentation provider \`${providerId}\`\n\n${initUsage()}`);
     return 1;
   }
 
   const cwd = process.cwd();
   const nearest = findNearestManifest(cwd);
-  const declared = nearest ? detectBackends(nearest.manifest) : [];
-  if (declared.some((candidate) => candidate.id === backend.id)) {
-    log(`${accent(backend.displayName)} is already set up (\`${backend.marker}\` is declared).`);
+  const declared = nearest ? detectProviders(nearest.manifest) : [];
+  if (declared.some((candidate) => candidate.id === provider.id)) {
+    log(`${accent(provider.displayName)} is already set up (\`${provider.marker}\` is declared).`);
     return 0;
   }
   if (declared.length > 0) {
     log(
       `Note: this project already declares ${declared
         .map((candidate) => `\`${candidate.marker}\``)
-        .join(', ')}. ` + 'Select a backend with `--backend` after init.',
+        .join(', ')}. ` + 'Select a provider with `--provider` after init.',
     );
   }
 
-  for (const file of backend.init.starterFiles) {
+  for (const file of provider.init.starterFiles) {
     const target = path.join(cwd, file.path);
     if (fs.existsSync(target)) {
       log(`Kept existing ${accent(file.path)}.`);
@@ -70,13 +70,13 @@ export async function runDocInit(
     log(`Created ${accent(file.path)}.`);
   }
 
-  log(`Installing ${backend.init.dependencies.map((dep) => accent(dep)).join(', ')}...`);
-  const exitCode = await runPm(['add', '-D', ...backend.init.dependencies]);
+  log(`Installing ${provider.init.dependencies.map((dep) => accent(dep)).join(', ')}...`);
+  const exitCode = await runPm(['add', '-D', ...provider.init.dependencies]);
   if (exitCode !== 0) {
-    errorMsg(`failed to install ${backend.init.dependencies.join(', ')}`);
+    errorMsg(`failed to install ${provider.init.dependencies.join(', ')}`);
     return exitCode;
   }
 
-  log(`${accent(backend.displayName)} is ready. Run \`vp doc\` to start the dev server.`);
+  log(`${accent(provider.displayName)} is ready. Run \`vp doc\` to start the dev server.`);
   return 0;
 }
