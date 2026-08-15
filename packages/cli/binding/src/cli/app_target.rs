@@ -271,6 +271,142 @@ pub(super) fn doc_needs_elicitation(cwd: &AbsolutePath) -> bool {
     classify_doc(cwd).is_some()
 }
 
+/// A workspace package that declares a documentation provider marker.
+struct DocCandidateRow {
+    name: vt_str::Str,
+    path: vt_str::Str,
+    absolute: AbsolutePathBuf,
+    providers: String,
+}
+
+fn read_manifest(dir: &AbsolutePath) -> Option<serde_json::Value> {
+    let contents = std::fs::read_to_string(dir.as_path().join("package.json")).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Elicit the documentation package for a bare `vp doc` lifecycle command
+/// at a workspace root (rfcs/doc-command.md, Monorepos): the interactive
+/// picker filtered to provider-marker packages, or the non-interactive
+/// candidate listing with exit 1. `command` is the invocation to echo in
+/// the hints (`doc`, `doc build`, `doc preview`). Applies only at a real
+/// workspace root whose own manifest declares no marker; everywhere else
+/// the command runs in place, and a root without candidates falls through
+/// to the no-provider flow.
+pub(super) fn resolve_doc_package_target(
+    cwd: &AbsolutePath,
+    command: &str,
+) -> Result<AppTarget, Error> {
+    let Ok((workspace_root, rel_from_root)) = vt_workspace::find_workspace_root(cwd) else {
+        return Ok(AppTarget::CurrentDir);
+    };
+    if !rel_from_root.as_str().is_empty()
+        || matches!(workspace_root.workspace_file, WorkspaceFile::NonWorkspacePackage(_))
+    {
+        return Ok(AppTarget::CurrentDir);
+    }
+    // A workspace root that declares its own marker is its own
+    // documentation site (the root-VitePress layout); detection handles it.
+    let root_declares_marker = read_manifest(&workspace_root.path)
+        .is_some_and(|manifest| !vp_doc_cli::detect_providers(&manifest).is_empty());
+    if root_declares_marker {
+        return Ok(AppTarget::CurrentDir);
+    }
+    let graph =
+        vt_workspace::load_package_graph(&workspace_root).map_err(|e| Error::Anyhow(e.into()))?;
+    let mut rows: Vec<DocCandidateRow> = graph
+        .node_weights()
+        .filter(|info| !info.path.as_str().is_empty())
+        .filter_map(|info| {
+            let absolute = info.absolute_path.to_absolute_path_buf();
+            let manifest = read_manifest(&absolute)?;
+            let providers = vp_doc_cli::detect_providers(&manifest);
+            if providers.is_empty() {
+                return None;
+            }
+            Some(DocCandidateRow {
+                name: info.package_json.name.clone(),
+                path: vt_str::Str::from(info.path.as_str()),
+                absolute,
+                providers: providers.iter().map(|p| p.id).collect::<Vec<_>>().join(", "),
+            })
+        })
+        .collect();
+    if rows.is_empty() {
+        return Ok(AppTarget::CurrentDir);
+    }
+    rows.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
+
+    if vp_shared::is_interactive_terminal() {
+        let Some(index) = run_doc_package_picker(&rows)? else {
+            return Ok(AppTarget::Exit(ExitStatus(130)));
+        };
+        let row = &rows[index];
+        // Deliberately stdout via println!: these lines belong to the
+        // command's own output stream, like the tool output that follows.
+        println!("Selected package: {} ({})", row.name, row.path);
+        println!("Tip: run this directly with `vp -C {} {command}`", row.path);
+        return Ok(AppTarget::Dir(row.absolute.clone()));
+    }
+
+    let header = if rows.len() == 1 {
+        "a workspace package declares a documentation provider"
+    } else {
+        "several workspace packages declare a documentation provider"
+    };
+    output::error(header);
+    output::raw_stderr("");
+    let invocations: Vec<String> =
+        rows.iter().map(|row| format!("vp -C {} {command}", row.path)).collect();
+    let width = invocations.iter().map(String::len).max().unwrap_or(0);
+    for (invocation, row) in invocations.iter().zip(&rows) {
+        output::raw_stderr(&format!("  {invocation:<width$}  ({})", row.providers));
+    }
+    Ok(AppTarget::Exit(ExitStatus(1)))
+}
+
+/// The documentation package picker: the package picker's look and
+/// milestone protocol, filtered rows, a doc-specific prompt.
+fn run_doc_package_picker(rows: &[DocCandidateRow]) -> Result<Option<usize>, Error> {
+    let emit_milestones =
+        std::env::var_os(env_vars::VP_EMIT_MILESTONES).is_some_and(|value| value == "1");
+    let items: Vec<vt_select::SelectItem> = rows
+        .iter()
+        .map(|row| vt_select::SelectItem {
+            label: vt_str::format!("{} {}", row.name, row.path),
+            display_name: row.name.clone(),
+            description: row.path.clone(),
+            group: None,
+        })
+        .collect();
+    let params = vt_select::SelectParams {
+        items: &items,
+        query: None,
+        header: None,
+        prompt: "Select a documentation package (\u{2191}/\u{2193}, Enter to run, type to search):",
+        page_size: 12,
+    };
+    let mut selected_index = 0usize;
+    let mut stdout = std::io::stdout();
+    let result = vt_select::select_list(
+        &mut stdout,
+        &params,
+        vt_select::Mode::Interactive { selected_index: &mut selected_index },
+        |state| {
+            if !emit_milestones {
+                return;
+            }
+            let milestone =
+                vt_str::format!("doc-package-select:{}:{}", state.query, state.selected_index);
+            emit_milestone_title(&milestone);
+        },
+    )
+    .map_err(Error::Anyhow)?;
+    Ok(match result {
+        vt_select::SelectResult::Selected => Some(selected_index),
+        vt_select::SelectResult::Cancelled => None,
+    })
+}
+
 /// Fuzzy package picker on `vt_select`, the same component behind the
 /// `vp run` task selector. Returns the selected row index, or `None` on
 /// Ctrl+C. When the PTY snapshot runner sets `VP_EMIT_MILESTONES=1`, every

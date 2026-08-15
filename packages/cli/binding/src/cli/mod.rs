@@ -410,6 +410,20 @@ pub async fn main(
                                 return execute_doc_info(json, &cwd, options.as_ref()).await;
                             }
                             vp_doc_cli::DocInvocation::Lifecycle(request) => {
+                                // The workspace documentation-package picker
+                                // and its non-interactive candidate listing
+                                // (rfcs/doc-command.md, Monorepos).
+                                let command = match request.action {
+                                    vp_doc_cli::DocAction::Dev => "doc",
+                                    vp_doc_cli::DocAction::Build => "doc build",
+                                    vp_doc_cli::DocAction::Preview => "doc preview",
+                                };
+                                let cwd =
+                                    match app_target::resolve_doc_package_target(&cwd, command)? {
+                                        app_target::AppTarget::Exit(status) => return Ok(status),
+                                        app_target::AppTarget::Dir(dir) => dir,
+                                        app_target::AppTarget::CurrentDir => cwd,
+                                    };
                                 // Interactive no-provider flow: offer
                                 // initialization, then continue with the
                                 // requested lifecycle command
