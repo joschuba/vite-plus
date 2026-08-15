@@ -767,4 +767,145 @@ mod tests {
             assert_eq!(app_command_parts(&subcommand).map(|(name, _)| name), expected);
         }
     }
+
+    /// A fresh directory under the OS temp dir; the caller removes it.
+    fn doc_temp_dir(name: &str) -> (std::path::PathBuf, AbsolutePathBuf) {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vite-plus-doc-target-{name}-{suffix}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        let abs = AbsolutePathBuf::new(dir.clone()).expect("temp dir should be absolute");
+        (dir, abs)
+    }
+
+    fn doc_subcommand(args: &[&str]) -> SynthesizableSubcommand {
+        SynthesizableSubcommand::Doc { args: args.iter().map(|arg| (*arg).to_string()).collect() }
+    }
+
+    #[test]
+    fn doc_redirect_applies_the_object_entry_to_every_subcommand() {
+        let (dir, cwd) = doc_temp_dir("redirect");
+        std::fs::write(dir.join("package.json"), r#"{ "name": "root" }"#).unwrap();
+        std::fs::write(
+            dir.join("vite.config.ts"),
+            "export default {\n  defaultPackage: {\n    doc: 'packages/docs',\n  },\n};\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("packages/docs")).unwrap();
+        std::fs::write(dir.join("packages/docs/package.json"), r#"{ "name": "docs" }"#).unwrap();
+
+        // `init` and `info` follow the redirect too (`elicit` false).
+        for (command, elicit) in [("doc build", true), ("doc init", false), ("doc info", false)] {
+            let target = resolve_doc_target(&cwd, command, elicit).unwrap();
+            let AppTarget::Dir(target) = target else {
+                panic!("expected a redirect for `{command}`");
+            };
+            assert!(target.as_path().ends_with("packages/docs"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn doc_redirect_ignores_the_string_form() {
+        let (dir, cwd) = doc_temp_dir("string-form");
+        std::fs::write(dir.join("package.json"), r#"{ "name": "root" }"#).unwrap();
+        std::fs::write(
+            dir.join("vite.config.ts"),
+            "export default {\n  defaultPackage: './apps/web',\n};\n",
+        )
+        .unwrap();
+        // The string form covers the app commands only, never `doc`.
+        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        assert!(matches!(target, AppTarget::CurrentDir));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn doc_redirect_reports_invalid_and_non_static_values() {
+        let (dir, cwd) = doc_temp_dir("invalid");
+        std::fs::write(dir.join("package.json"), r#"{ "name": "root" }"#).unwrap();
+        std::fs::write(dir.join("vite.config.ts"), "export default {\n  defaultPackage: 42,\n};\n")
+            .unwrap();
+        // An invalid shape errors loudly instead of being ignored.
+        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        assert!(matches!(target, AppTarget::Exit(ExitStatus(1))));
+
+        std::fs::write(
+            dir.join("vite.config.ts"),
+            "export default {\n  defaultPackage: pick(),\n};\n",
+        )
+        .unwrap();
+        // A declared but non-static value fails the same way.
+        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        assert!(matches!(target, AppTarget::Exit(ExitStatus(1))));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A workspace with two documentation packages and one plain package.
+    fn doc_workspace(name: &str) -> (std::path::PathBuf, AbsolutePathBuf) {
+        let (dir, abs) = doc_temp_dir(name);
+        std::fs::write(dir.join("package.json"), r#"{ "name": "root" }"#).unwrap();
+        std::fs::write(dir.join("pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n").unwrap();
+        for (member, manifest) in [
+            (
+                "docs",
+                r#"{ "name": "docs", "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#,
+            ),
+            (
+                "handbook",
+                r#"{ "name": "handbook", "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
+            ),
+            ("app", r#"{ "name": "app" }"#),
+        ] {
+            let member_dir = dir.join("packages").join(member);
+            std::fs::create_dir_all(&member_dir).unwrap();
+            std::fs::write(member_dir.join("package.json"), manifest).unwrap();
+        }
+        (dir, abs)
+    }
+
+    #[test]
+    fn doc_classification_elicits_marker_members_at_a_workspace_root() {
+        let (dir, cwd) = doc_workspace("elicit");
+        let DocClassification::Elicit(rows) = classify_doc(&cwd).unwrap() else {
+            panic!("expected candidates");
+        };
+        // Only marker-declaring members, sorted by path.
+        assert_eq!(
+            rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
+            ["packages/docs", "packages/handbook"]
+        );
+        assert_eq!(rows[0].providers, "starlight");
+        assert_eq!(rows[1].providers, "vitepress");
+
+        // A member directory never elicits: detection stays local.
+        let member = AbsolutePathBuf::new(dir.join("packages/docs")).unwrap();
+        assert!(matches!(classify_doc(&member).unwrap(), DocClassification::RunInPlace));
+
+        // A root that declares its own marker is its own documentation site.
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{ "name": "root", "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
+        )
+        .unwrap();
+        assert!(matches!(classify_doc(&cwd).unwrap(), DocClassification::RunInPlace));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn doc_scripts_intercept_per_invocation_shape() {
+        let (dir, cwd) = doc_workspace("intercept");
+        // Actions at a candidates root spawn the real binary.
+        assert!(needs_elicitation(&doc_subcommand(&["build"]), &cwd));
+        // `init`, `info`, and unparsable arguments spawn it anywhere.
+        let member = AbsolutePathBuf::new(dir.join("packages/docs")).unwrap();
+        assert!(needs_elicitation(&doc_subcommand(&["init", "vitepress"]), &member));
+        assert!(needs_elicitation(&doc_subcommand(&["info"]), &member));
+        assert!(needs_elicitation(&doc_subcommand(&["--bogus"]), &member));
+        // An action inside the documentation package synthesizes (cached path).
+        assert!(!needs_elicitation(&doc_subcommand(&["build"]), &member));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

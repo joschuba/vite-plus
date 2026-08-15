@@ -442,3 +442,66 @@ fn merge_resolved_envs_with_version(
         .or_insert_with(|| Arc::from(OsStr::new(env!("CARGO_PKG_VERSION"))));
     merged
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use vt_path::AbsolutePathBuf;
+
+    use super::*;
+
+    /// A package that declares and installs a fake VitePress 2; the caller
+    /// removes the directory.
+    fn doc_fixture(name: &str) -> (std::path::PathBuf, AbsolutePathBuf) {
+        let suffix =
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("time should be valid").as_nanos();
+        let dir = std::env::temp_dir().join(format!("vite-plus-doc-cache-{name}-{suffix}"));
+        let bin_dir = dir.join("node_modules/vitepress/bin");
+        fs::create_dir_all(&bin_dir).expect("fixture should be created");
+        fs::write(
+            dir.join("package.json"),
+            r#"{ "name": "fixture", "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
+        )
+        .expect("package.json should be written");
+        fs::write(
+            dir.join("node_modules/vitepress/package.json"),
+            r#"{ "name": "vitepress", "version": "2.0.0-alpha.19", "bin": { "vitepress": "bin/vitepress.js" } }"#,
+        )
+        .expect("installed manifest should be written");
+        fs::write(bin_dir.join("vitepress.js"), "").expect("bin should be written");
+        let abs = AbsolutePathBuf::new(dir.clone()).expect("fixture dir should be absolute");
+        (dir, abs)
+    }
+
+    async fn resolve_doc(args: &[&str], cwd: &AbsolutePathBuf) -> ResolvedSubcommand {
+        let workspace: Arc<AbsolutePath> = cwd.clone().into();
+        let resolver = SubcommandResolver::new(workspace);
+        let envs: Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>> = Arc::new(FxHashMap::default());
+        let subcommand = SynthesizableSubcommand::Doc {
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        };
+        resolver.resolve(subcommand, None, &envs, cwd).await.expect("the doc action should resolve")
+    }
+
+    #[tokio::test]
+    async fn doc_build_is_cached_and_the_servers_are_not() {
+        let (dir, cwd) = doc_fixture("policy");
+        let build = resolve_doc(&["build"], &cwd).await;
+        assert!(matches!(build.cache_config, UserCacheConfig::Enabled { .. }));
+        // The resolved execution is the package bin through the managed
+        // runtime.
+        assert_eq!(build.program.as_ref(), OsStr::new("node"));
+        assert!(build.args[0].as_str().ends_with("vitepress.js"), "{:?}", build.args);
+        assert_eq!(build.args[1].as_str(), "build");
+
+        let dev = resolve_doc(&["dev"], &cwd).await;
+        assert!(matches!(dev.cache_config, UserCacheConfig::Disabled { .. }));
+        let preview = resolve_doc(&["preview"], &cwd).await;
+        assert!(matches!(preview.cache_config, UserCacheConfig::Disabled { .. }));
+        fs::remove_dir_all(dir).expect("fixture should be removed");
+    }
+}
