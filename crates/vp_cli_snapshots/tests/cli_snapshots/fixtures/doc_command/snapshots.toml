@@ -94,3 +94,36 @@ vp = "local"
 cwd = "redirect"
 comment = "The `defaultPackage` `doc` entry behaves as an implicit `-C` into the documentation package."
 steps = [["vp", "doc", "build"]]
+
+[[case]]
+name = "doc_init_full_run"
+vp = "local"
+cwd = "init_full"
+local-registry = true
+comment = "A full `vp doc init vitepress` run: scaffold, install the fake `vitepress@next` from the mock registry, then the action runs the installed tool."
+steps = [
+  { argv = ["vp", "doc", "init", "vitepress"], comment = "scaffold and install from the mock registry" },
+  { argv = ["vpt", "print-file", "index.md"], comment = "the scaffolded first page" },
+  { argv = ["vp", "doc", "build"], comment = "detection now selects the installed provider" },
+]
+
+[[case]]
+name = "doc_dev_server_signal"
+vp = "local"
+cwd = "dev_server"
+comment = "Ctrl+C reaches the delegated dev server; the tool decides the exit status."
+steps = [
+  { argv = ["vp", "doc"], timeout = 30000, continue-on-failure = true, interactions = [
+    { "expect-milestone" = "doc-dev-server:ready" },
+    { "write-key" = "ctrl-c" },
+  ] },
+]
+
+[[case]]
+name = "doc_tool_exit_code"
+vp = "local"
+cwd = "failing_tool"
+comment = "A failing tool run keeps its own exit status; Vite+ adds nothing."
+steps = [
+  { argv = ["vp", "doc", "build"], continue-on-failure = true },
+]

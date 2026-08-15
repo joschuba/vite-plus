@@ -1,0 +1,27 @@
+{
+  "vitepress": {
+    "name": "vitepress",
+    "dist-tags": {
+      "latest": "2.0.0-alpha.19",
+      "next": "2.0.0-alpha.19"
+    },
+    "versions": {
+      "2.0.0-alpha.19": {
+        "name": "vitepress",
+        "version": "2.0.0-alpha.19",
+        "bin": {
+          "vitepress": "bin/vitepress.js"
+        },
+        "dist": {
+          "tarball": "{REGISTRY}/vitepress/-/vitepress-2.0.0-alpha.19.tgz",
+          "integrity": "sha512-ccSr2CfYHeG3fhbyqy3ibKMhTxVDGJE9i85BBL68mCqtBd0lYJFo/ZZ3L2A+Sae+JzUE+O9tNTpplHeOP2L/TQ=="
+        }
+      }
+    },
+    "time": {
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "2.0.0-alpha.19": "2024-01-01T00:00:00.000Z"
+    }
+  }
+}
