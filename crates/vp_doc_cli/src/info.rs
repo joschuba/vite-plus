@@ -2,68 +2,112 @@
 
 use std::path::Path;
 
-use serde::Serialize;
-
 use crate::{
     config::DocConfigContext,
     detect::find_installed_package,
     error::Error,
-    providers::ProviderDefinition,
+    providers::{ProviderDefinition, ProviderTarget},
     resolve::{self, SelectionSource},
 };
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocSelectionSource {
-    pub kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub marker: Option<&'static str>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// The tool half of the report: the executable package. For a host-bin
+/// provider such as Starlight this differs from the marker; the version
+/// gate (`supported_range`/`version_supported`) stays on the marker.
+#[derive(Debug)]
 pub struct DocToolInfo {
     pub package: &'static str,
     pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_range: Option<&'static str>,
     pub version_supported: bool,
 }
 
-/// The `vp doc info` report. The JSON form serializes this struct verbatim.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocInfoReport {
-    pub provider: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<DocSelectionSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool: Option<DocToolInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commands: Option<Vec<&'static str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub candidates: Option<Vec<&'static str>>,
+/// A report that resolved to a usable provider.
+#[derive(Debug)]
+pub struct DocInfoResolved {
+    pub provider: &'static ProviderDefinition,
+    pub source: SelectionSource,
+    pub tool: DocToolInfo,
+}
+
+/// The `vp doc info` report: either a resolved provider or the unresolved
+/// state with its candidates (empty for no provider, several for multiple
+/// markers).
+#[derive(Debug)]
+pub enum DocInfoReport {
+    Resolved(DocInfoResolved),
+    Unresolved { candidates: Vec<&'static str> },
 }
 
 impl DocInfoReport {
     /// The report resolves to a usable provider.
     pub fn resolved(&self) -> bool {
-        self.provider.is_some()
+        matches!(self, DocInfoReport::Resolved(_))
+    }
+
+    /// The RFC's JSON shape (rfcs/doc-command.md, Selection reporting).
+    /// Keys are inserted in the documented order.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            DocInfoReport::Resolved(info) => {
+                let mut source = serde_json::Map::new();
+                match info.source {
+                    SelectionSource::Config => {
+                        source.insert("kind".into(), "config".into());
+                    }
+                    SelectionSource::Marker => {
+                        source.insert("kind".into(), "dependency-marker".into());
+                        source.insert("marker".into(), info.provider.marker.into());
+                    }
+                }
+                let mut tool = serde_json::Map::new();
+                tool.insert("package".into(), info.tool.package.into());
+                tool.insert(
+                    "version".into(),
+                    info.tool.version.as_deref().map_or(serde_json::Value::Null, Into::into),
+                );
+                if let Some(range) = info.tool.supported_range {
+                    tool.insert("supportedRange".into(), range.into());
+                }
+                tool.insert("versionSupported".into(), info.tool.version_supported.into());
+                let mut report = serde_json::Map::new();
+                report.insert("provider".into(), info.provider.id.into());
+                report.insert("displayName".into(), info.provider.display_name.into());
+                report.insert("source".into(), source.into());
+                report.insert("target".into(), info.provider.target.as_str().into());
+                report.insert("tool".into(), tool.into());
+                report.insert(
+                    "commands".into(),
+                    info.provider
+                        .capabilities
+                        .iter()
+                        .map(|action| action.as_str().into())
+                        .collect::<Vec<serde_json::Value>>()
+                        .into(),
+                );
+                report.into()
+            }
+            DocInfoReport::Unresolved { candidates } => {
+                let mut report = serde_json::Map::new();
+                report.insert("provider".into(), serde_json::Value::Null);
+                report.insert(
+                    "candidates".into(),
+                    candidates
+                        .iter()
+                        .map(|id| (*id).into())
+                        .collect::<Vec<serde_json::Value>>()
+                        .into(),
+                );
+                report.into()
+            }
+        }
     }
 }
 
-fn build_report(
+fn build_resolved(
     provider: &'static ProviderDefinition,
     source: SelectionSource,
     root: &Path,
-) -> DocInfoReport {
-    // The version gate applies to the marker package; the reported tool is
-    // the executable package, which differs for host-bin providers such as
-    // Starlight (marker `@astrojs/starlight`, tool `astro`).
+) -> DocInfoResolved {
     let marker_version = find_installed_package(provider.marker, root)
         .as_ref()
         .and_then(|package| package.version())
@@ -72,8 +116,8 @@ fn build_report(
         provider.version_range.is_none_or(|range| resolve::version_satisfies(version, range))
     });
     let tool_package = match provider.target {
-        crate::providers::ProviderTarget::PackageBin { package_name, .. } => package_name,
-        crate::providers::ProviderTarget::BuiltinVite => provider.marker,
+        ProviderTarget::PackageBin { package_name, .. } => package_name,
+        ProviderTarget::BuiltinVite => provider.marker,
     };
     let tool_version = if tool_package == provider.marker {
         marker_version
@@ -83,26 +127,15 @@ fn build_report(
             .and_then(|package| package.version())
             .map(str::to_string)
     };
-    let source = match source {
-        SelectionSource::Config => DocSelectionSource { kind: "config", marker: None },
-        SelectionSource::Marker => {
-            DocSelectionSource { kind: "dependency-marker", marker: Some(provider.marker) }
-        }
-    };
-
-    DocInfoReport {
-        provider: Some(provider.id),
-        display_name: Some(provider.display_name),
-        source: Some(source),
-        target: Some(provider.target.as_str()),
-        tool: Some(DocToolInfo {
+    DocInfoResolved {
+        provider,
+        source,
+        tool: DocToolInfo {
             package: tool_package,
             version: tool_version,
             supported_range: provider.version_range,
             version_supported,
-        }),
-        commands: Some(provider.capabilities.iter().map(|action| action.as_str()).collect()),
-        candidates: None,
+        },
     }
 }
 
@@ -112,32 +145,22 @@ fn build_report(
 pub fn info_report(cwd: &Path, context: Option<&DocConfigContext>) -> Result<DocInfoReport, Error> {
     match resolve::select_provider(context, cwd) {
         Ok(resolve::ProviderSelection::Selected { provider, source }) => {
-            Ok(build_report(provider, source, cwd))
+            Ok(DocInfoReport::Resolved(build_resolved(provider, source, cwd)))
         }
         Err(Error::UserMessage(message))
             if context.is_some_and(|context| context.config.provider.is_some()) =>
         {
             Err(Error::UserMessage(message))
         }
-        Ok(resolve::ProviderSelection::NoProvider) | Err(_) => Ok(DocInfoReport {
-            provider: None,
-            display_name: None,
-            source: None,
-            target: None,
-            tool: None,
-            commands: None,
-            candidates: Some(detected_candidates(cwd)),
+        Ok(resolve::ProviderSelection::NoProvider) | Err(_) => Ok(DocInfoReport::Unresolved {
+            candidates: crate::detect::find_nearest_manifest(cwd)
+                .map(|manifest| crate::detect::detect_providers(&manifest))
+                .unwrap_or_default()
+                .iter()
+                .map(|provider| provider.id)
+                .collect(),
         }),
     }
-}
-
-fn detected_candidates(root: &Path) -> Vec<&'static str> {
-    crate::detect::find_nearest_manifest(root)
-        .map(|nearest| crate::detect::detect_providers(&nearest.manifest))
-        .unwrap_or_default()
-        .iter()
-        .map(|provider| provider.id)
-        .collect()
 }
 
 #[cfg(test)]
@@ -169,13 +192,37 @@ mod tests {
         )
         .unwrap();
         let report = info_report(dir.path(), None).unwrap();
-        assert_eq!(report.provider, Some("starlight"));
-        let tool = report.tool.expect("tool info");
-        assert_eq!(tool.package, "astro");
-        assert_eq!(tool.version.as_deref(), Some("7.2.2"));
+        let DocInfoReport::Resolved(info) = &report else {
+            panic!("expected a resolved report");
+        };
+        assert_eq!(info.provider.id, "starlight");
+        assert_eq!(info.tool.package, "astro");
+        assert_eq!(info.tool.version.as_deref(), Some("7.2.2"));
         // The version gate stays on the marker package.
-        assert!(tool.version_supported);
-        let source = report.source.expect("source");
-        assert_eq!(source.marker, Some("@astrojs/starlight"));
+        assert!(info.tool.version_supported);
+        let json = report.to_json();
+        assert_eq!(json["provider"], "starlight");
+        assert_eq!(json["source"]["kind"], "dependency-marker");
+        assert_eq!(json["source"]["marker"], "@astrojs/starlight");
+        assert_eq!(json["tool"]["package"], "astro");
+        assert_eq!(json["commands"][0], "dev");
+    }
+
+    #[test]
+    fn unresolved_report_lists_the_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        let report = info_report(dir.path(), None).unwrap();
+        let DocInfoReport::Unresolved { candidates } = &report else {
+            panic!("expected an unresolved report");
+        };
+        assert_eq!(candidates, &["vitepress", "vocs"]);
+        let json = report.to_json();
+        assert_eq!(json["provider"], serde_json::Value::Null);
+        assert_eq!(json["candidates"][1], "vocs");
     }
 }

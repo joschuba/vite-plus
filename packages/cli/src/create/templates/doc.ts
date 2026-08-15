@@ -5,6 +5,10 @@
  * standalone or as a workspace package through the normal package-creation
  * flow. The files are generated in code, so no template payload ships in
  * the published package. Never writes into a non-empty directory.
+ *
+ * The Rust `vp doc init` scaffold carries its own VitePress starter
+ * (crates/vp_doc_cli/src/providers.rs); keep the two starters in step when
+ * the VitePress line or the first-page content changes.
  */
 
 import fs from 'node:fs';

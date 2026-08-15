@@ -8467,6 +8467,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+ "vp_migration",
  "vp_static_config",
  "vt_path",
 ]

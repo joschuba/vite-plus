@@ -16,6 +16,13 @@ impl DocAction {
             DocAction::Preview => "preview",
         }
     }
+
+    /// `dev` and `preview` run long-lived servers; only `build` is a batch
+    /// operation. Cache policy and terminal handling both key off this, so
+    /// the distinction lives here once.
+    pub fn is_server(self) -> bool {
+        !matches!(self, DocAction::Build)
+    }
 }
 
 /// An action invocation: the action and the arguments forwarded to the
@@ -31,7 +38,7 @@ pub struct DocRequest {
 #[derive(Debug)]
 pub enum DocInvocation {
     Action(DocRequest),
-    Init { args: Vec<String> },
+    Init { provider: Option<String> },
     Info { json: bool },
 }
 
@@ -58,7 +65,7 @@ pub fn parse_doc_args(args: &[String]) -> Result<DocInvocation, Error> {
         "dev" => DocAction::Dev,
         "build" => DocAction::Build,
         "preview" => DocAction::Preview,
-        "init" => return Ok(DocInvocation::Init { args: rest }),
+        "init" => return parse_init_args(&rest),
         "info" => return parse_info_args(&rest),
         other => {
             return Err(user_message(format!(
@@ -67,6 +74,19 @@ pub fn parse_doc_args(args: &[String]) -> Result<DocInvocation, Error> {
         }
     };
     Ok(DocInvocation::Action(DocRequest { action, args: rest }))
+}
+
+fn parse_init_args(args: &[String]) -> Result<DocInvocation, Error> {
+    let mut provider = None;
+    for arg in args {
+        if arg.starts_with('-') || provider.is_some() {
+            return Err(user_message(format!(
+                "unexpected argument `{arg}`\n\nUsage: vp doc init [PROVIDER]"
+            )));
+        }
+        provider = Some(arg.clone());
+    }
+    Ok(DocInvocation::Init { provider })
 }
 
 fn parse_info_args(args: &[String]) -> Result<DocInvocation, Error> {
@@ -139,13 +159,21 @@ mod tests {
     }
 
     #[test]
-    fn init_takes_the_remaining_arguments() {
-        let DocInvocation::Init { args: rest } =
+    fn init_takes_one_optional_provider_id() {
+        let DocInvocation::Init { provider } =
             parse_doc_args(&args(&["init", "vitepress"])).unwrap()
         else {
             panic!("expected init");
         };
-        assert_eq!(rest, ["vitepress"]);
+        assert_eq!(provider.as_deref(), Some("vitepress"));
+        assert!(matches!(
+            parse_doc_args(&args(&["init"])).unwrap(),
+            DocInvocation::Init { provider: None }
+        ));
+        let message = parse_error(&["init", "vitepress", "extra"]);
+        assert!(message.contains("unexpected argument `extra`"), "{message}");
+        let message = parse_error(&["init", "--json"]);
+        assert!(message.contains("unexpected argument `--json`"), "{message}");
     }
 
     #[test]

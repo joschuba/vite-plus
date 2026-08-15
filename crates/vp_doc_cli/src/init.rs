@@ -40,10 +40,10 @@ pub enum DocConfigWrite {
     /// A new `vite.config.ts` was created with the `doc.provider` entry.
     Created,
     /// The existing config file gained the `doc.provider` entry.
-    Updated { file: &'static str },
+    Updated { file: String },
     /// The existing config could not be edited safely; the caller prints
     /// the manual instruction.
-    Manual { file: &'static str },
+    Manual { file: String },
 }
 
 fn init_usage() -> String {
@@ -53,18 +53,18 @@ fn init_usage() -> String {
 
 /// Run the scaffold steps of `vp doc init`. Never overwrites existing files
 /// and never installs packages; the returned outcome carries the dependency
-/// specs for the caller's package-manager dispatch.
-pub fn init_scaffold(args: &[String], cwd: &Path) -> Result<DocInitOutcome, Error> {
-    let provider_id = args.first();
-    let Some(provider_id) = provider_id.filter(|id| !id.starts_with('-')) else {
+/// specs for the caller's package-manager dispatch. A non-interactive
+/// session must name the provider; the interactive caller supplies the
+/// picker's choice.
+pub fn init_scaffold(provider_id: Option<&str>, cwd: &Path) -> Result<DocInitOutcome, Error> {
+    let Some(provider_id) = provider_id else {
         return Err(user_message(format!(
             "`vp doc init` requires a provider ID\n\n{}",
             init_usage()
         )));
     };
 
-    let Some(provider) = init_providers().find(|provider| provider.id == provider_id.as_str())
-    else {
+    let Some(provider) = init_providers().find(|provider| provider.id == provider_id) else {
         return Err(user_message(format!(
             "unknown documentation provider `{provider_id}`\n\n{}",
             init_usage()
@@ -72,9 +72,8 @@ pub fn init_scaffold(args: &[String], cwd: &Path) -> Result<DocInitOutcome, Erro
     };
     let init = provider.init.as_ref().expect("init_providers yields init-capable providers");
 
-    let declared = find_nearest_manifest(cwd)
-        .map(|nearest| detect_providers(&nearest.manifest))
-        .unwrap_or_default();
+    let declared =
+        find_nearest_manifest(cwd).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
     if declared.iter().any(|candidate| candidate.id == provider.id) {
         return Ok(DocInitOutcome::AlreadyConfigured { provider });
     }
@@ -96,26 +95,27 @@ pub fn init_scaffold(args: &[String], cwd: &Path) -> Result<DocInitOutcome, Erro
     Ok(DocInitOutcome::Scaffolded { provider, files, dependencies: init.dependencies })
 }
 
-const CONFIG_FILE_NAMES: &[&str] =
-    &["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"];
-
 /// Init step 3: write `doc` configuration to the effective root's Vite
 /// config only when detection alone would not select the provider, for
 /// example when another marker is already declared. Runs after the
 /// dependency install, so the nearest manifest reflects the final state.
+///
+/// The target file comes from `vp_static_config::resolve_config_path`, the
+/// same priority order resolution reads, so the written config is the one
+/// later invocations load.
 pub fn write_doc_provider_config(
     provider: &ProviderDefinition,
     cwd: &Path,
 ) -> Result<DocConfigWrite, Error> {
-    let detected = find_nearest_manifest(cwd)
-        .map(|nearest| detect_providers(&nearest.manifest))
-        .unwrap_or_default();
+    let detected =
+        find_nearest_manifest(cwd).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
     if matches!(detected.as_slice(), [only] if only.id == provider.id) {
         return Ok(DocConfigWrite::NotNeeded);
     }
 
     let entry = format!("doc: {{\n    provider: '{}',\n  }},", provider.id);
-    let Some(file) = CONFIG_FILE_NAMES.iter().copied().find(|name| cwd.join(name).exists()) else {
+    let existing = vt_path::AbsolutePath::new(cwd).and_then(vp_static_config::resolve_config_path);
+    let Some(path) = existing else {
         let content = format!(
             "import {{ defineConfig }} from 'vite-plus';\n\nexport default defineConfig({{\n  {entry}\n}});\n"
         );
@@ -123,12 +123,18 @@ pub fn write_doc_provider_config(
         return Ok(DocConfigWrite::Created);
     };
 
-    let path = cwd.join(file);
-    let contents = fs::read_to_string(&path)?;
-    // A config that already carries a `doc` block needs a human decision;
-    // never overwrite a stated provider.
-    if contents.contains("doc:") {
-        return Ok(DocConfigWrite::Manual { file });
+    let file = path
+        .as_path()
+        .file_name()
+        .map_or_else(|| "vite.config.ts".to_string(), |name| name.to_string_lossy().into_owned());
+    let contents = fs::read_to_string(path.as_path())?;
+    // A config that already carries a `doc` key needs a human decision;
+    // never overwrite a stated provider. The check is AST-based, so a `doc`
+    // substring in a comment or a task name does not block the insert. An
+    // unparsable config falls to the manual instruction.
+    match vp_migration::has_config_key(&contents, "doc") {
+        Ok(false) => {}
+        Ok(true) | Err(_) => return Ok(DocConfigWrite::Manual { file }),
     }
     for opening in ["export default defineConfig({", "export default {"] {
         if let Some(index) = contents.find(opening) {
@@ -138,7 +144,7 @@ pub fn write_doc_provider_config(
             updated.push_str("\n  ");
             updated.push_str(&entry);
             updated.push_str(&contents[insert_at..]);
-            fs::write(&path, updated)?;
+            fs::write(path.as_path(), updated)?;
             return Ok(DocConfigWrite::Updated { file });
         }
     }
@@ -154,15 +160,10 @@ mod tests {
         DOC_PROVIDERS.iter().find(|provider| provider.id == id).unwrap()
     }
 
-    fn scaffold(args: &[&str], cwd: &Path) -> Result<DocInitOutcome, Error> {
-        let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-        init_scaffold(&args, cwd)
-    }
-
     #[test]
     fn init_requires_an_explicit_provider_id() {
         let dir = tempfile::tempdir().unwrap();
-        let Error::UserMessage(message) = scaffold(&[], dir.path()).unwrap_err() else {
+        let Error::UserMessage(message) = init_scaffold(None, dir.path()).unwrap_err() else {
             panic!("expected a user message");
         };
         assert!(message.contains("requires a provider ID"), "{message}");
@@ -173,7 +174,8 @@ mod tests {
     #[test]
     fn init_rejects_an_unknown_provider() {
         let dir = tempfile::tempdir().unwrap();
-        let Error::UserMessage(message) = scaffold(&["typedoc"], dir.path()).unwrap_err() else {
+        let Error::UserMessage(message) = init_scaffold(Some("typedoc"), dir.path()).unwrap_err()
+        else {
             panic!("expected a user message");
         };
         assert!(message.contains("unknown documentation provider `typedoc`"), "{message}");
@@ -185,7 +187,7 @@ mod tests {
         fs::write(dir.path().join("package.json"), "{}").unwrap();
         fs::write(dir.path().join("astro.config.mjs"), "// existing config\n").unwrap();
         let DocInitOutcome::Scaffolded { provider, files, dependencies } =
-            scaffold(&["starlight"], dir.path()).unwrap()
+            init_scaffold(Some("starlight"), dir.path()).unwrap()
         else {
             panic!("expected a scaffold");
         };
@@ -210,7 +212,7 @@ mod tests {
             r#"{ "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
         )
         .unwrap();
-        let outcome = scaffold(&["vitepress"], dir.path()).unwrap();
+        let outcome = init_scaffold(Some("vitepress"), dir.path()).unwrap();
         assert!(matches!(
             outcome,
             DocInitOutcome::AlreadyConfigured { provider } if provider.id == "vitepress"
@@ -259,7 +261,7 @@ mod tests {
         )
         .unwrap();
         let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
-        assert_eq!(write, DocConfigWrite::Updated { file: "vite.config.ts" });
+        assert_eq!(write, DocConfigWrite::Updated { file: "vite.config.ts".to_string() });
         let contents = fs::read_to_string(dir.path().join("vite.config.ts")).unwrap();
         assert!(
             contents.contains(
@@ -267,6 +269,44 @@ mod tests {
             ),
             "{contents}"
         );
+    }
+
+    #[test]
+    fn config_write_targets_the_file_resolution_reads() {
+        // Vite resolves vite.config.js before vite.config.ts; the write must
+        // land in the file later invocations load.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("vite.config.js"), "export default {\n};\n").unwrap();
+        fs::write(dir.path().join("vite.config.ts"), "export default {\n};\n").unwrap();
+        let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
+        assert_eq!(write, DocConfigWrite::Updated { file: "vite.config.js".to_string() });
+        let js = fs::read_to_string(dir.path().join("vite.config.js")).unwrap();
+        assert!(js.contains("provider: 'vocs'"), "{js}");
+        let ts = fs::read_to_string(dir.path().join("vite.config.ts")).unwrap();
+        assert!(!ts.contains("provider"), "{ts}");
+    }
+
+    #[test]
+    fn config_write_ignores_a_doc_substring_outside_the_config_object() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("vite.config.ts"),
+            "// doc: not a config key\nexport default {\n  run: { tasks: { doc: { command: 'x' } } },\n};\n",
+        )
+        .unwrap();
+        let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
+        // `run.tasks.doc` is not a top-level `doc` key; the insert proceeds.
+        assert_eq!(write, DocConfigWrite::Updated { file: "vite.config.ts".to_string() });
     }
 
     #[test]
@@ -280,7 +320,7 @@ mod tests {
         let original = "export default {\n  doc: {\n    provider: 'vitepress',\n  },\n};\n";
         fs::write(dir.path().join("vite.config.ts"), original).unwrap();
         let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
-        assert_eq!(write, DocConfigWrite::Manual { file: "vite.config.ts" });
+        assert_eq!(write, DocConfigWrite::Manual { file: "vite.config.ts".to_string() });
         assert_eq!(fs::read_to_string(dir.path().join("vite.config.ts")).unwrap(), original);
     }
 
@@ -295,7 +335,7 @@ mod tests {
         let original = "export default makeConfig();\n";
         fs::write(dir.path().join("vite.config.mts"), original).unwrap();
         let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
-        assert_eq!(write, DocConfigWrite::Manual { file: "vite.config.mts" });
+        assert_eq!(write, DocConfigWrite::Manual { file: "vite.config.mts".to_string() });
         assert_eq!(fs::read_to_string(dir.path().join("vite.config.mts")).unwrap(), original);
     }
 }

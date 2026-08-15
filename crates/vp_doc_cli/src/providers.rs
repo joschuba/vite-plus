@@ -79,7 +79,10 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         target: ProviderTarget::PackageBin { package_name: "vitepress", bin_name: "vitepress" },
         init: Some(ProviderInit {
             // `next` is the VitePress 2 dist-tag while 2.0 is prerelease; a
-            // range spec replaces it when 2.0 reaches `latest`.
+            // range spec replaces it when 2.0 reaches `latest`. The
+            // `vite:doc` create template carries its own VitePress starter
+            // (packages/cli/src/create/templates/doc.ts); keep the two in
+            // step when the VitePress line or the first page changes.
             dependencies: &["vitepress@next"],
             starter_files: &[StarterFile {
                 path: "index.md",

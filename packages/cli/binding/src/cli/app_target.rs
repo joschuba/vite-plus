@@ -233,48 +233,6 @@ fn resolve_default_package(
     }
 }
 
-/// The `defaultPackage` value that applies to `vp doc` at this directory,
-/// or `None` when no redirect applies: not at the invocation root, no
-/// declaration, or the string form (which covers the app commands only,
-/// never `doc`). A declared but non-static value passes through so the
-/// resolver can report it loudly, like the app commands.
-fn classify_doc(cwd: &AbsolutePath) -> Option<vp_static_config::FieldValue> {
-    let at_invocation_root = vt_workspace::find_workspace_root(cwd)
-        .as_ref()
-        .map_or(true, |(_, rel_from_root)| rel_from_root.as_str().is_empty());
-    if !at_invocation_root {
-        return None;
-    }
-    match vp_static_config::resolve_static_config(cwd).get_declared("defaultPackage")? {
-        vp_static_config::FieldValue::Json(serde_json::Value::Object(map)) => {
-            map.get("doc").cloned().map(vp_static_config::FieldValue::Json)
-        }
-        vp_static_config::FieldValue::Json(_) => None,
-        non_static @ vp_static_config::FieldValue::NonStatic => Some(non_static),
-    }
-}
-
-/// The `defaultPackage` `doc` entry (rfcs/doc-command.md): at the invocation
-/// root, every `vp doc` subcommand behaves as an implicit `-C` into the
-/// named documentation package. Reuses the app commands' value resolution,
-/// note line included.
-pub(super) fn resolve_doc_target(cwd: &AbsolutePath) -> AppTarget {
-    match classify_doc(cwd) {
-        Some(value) => resolve_default_package("doc", cwd, value),
-        None => AppTarget::CurrentDir,
-    }
-}
-
-/// Pure predicate for the vp-script interception: would the
-/// `defaultPackage` `doc` redirect or the workspace documentation-package
-/// elicitation apply at this directory? Never prints and never runs the
-/// picker; a classification error counts as no elicitation, in which case
-/// the synthesized command surfaces its own error.
-pub(super) fn doc_needs_elicitation(cwd: &AbsolutePath) -> bool {
-    classify_doc(cwd).is_some()
-        || matches!(classify_doc_packages(cwd), Ok(DocPackageClassification::Elicit(_)))
-}
-
 /// A workspace package that declares a documentation provider marker.
 struct DocCandidateRow {
     name: vt_str::Str,
@@ -283,37 +241,54 @@ struct DocCandidateRow {
     providers: String,
 }
 
-fn read_manifest(dir: &AbsolutePath) -> Option<serde_json::Value> {
-    let contents = std::fs::read_to_string(dir.as_path().join("package.json")).ok()?;
-    serde_json::from_str(&contents).ok()
-}
-
-/// The workspace documentation-package classification at a directory.
-enum DocPackageClassification {
-    /// Not a real workspace root, the root declares its own marker, or no
-    /// member declares one: the command runs in place.
+/// The doc-specific classification, resolved with one workspace walk and
+/// one static-config read per invocation (rfcs/doc-command.md).
+enum DocClassification {
+    /// No redirect and no candidates: the command runs in place.
     RunInPlace,
-    /// Marker-declaring members exist: picker or listing territory.
+    /// The `defaultPackage` `doc` entry applies (the carried value may be
+    /// invalid or non-static; [`resolve_default_package`] reports it).
+    Redirect(vp_static_config::FieldValue),
+    /// Marker-declaring members at a real workspace root without a root
+    /// marker: picker or listing territory for the actions.
     Elicit(Vec<DocCandidateRow>),
 }
 
-/// Classify a directory for the workspace documentation-package
-/// elicitation (rfcs/doc-command.md, Monorepos). Pure: never prints.
-fn classify_doc_packages(cwd: &AbsolutePath) -> Result<DocPackageClassification, Error> {
-    let Ok((workspace_root, rel_from_root)) = vt_workspace::find_workspace_root(cwd) else {
-        return Ok(DocPackageClassification::RunInPlace);
+/// Classify a `vp doc` invocation directory. Pure: never prints.
+fn classify_doc(cwd: &AbsolutePath) -> Result<DocClassification, Error> {
+    let workspace = vt_workspace::find_workspace_root(cwd);
+    let at_invocation_root =
+        workspace.as_ref().map_or(true, |(_, rel_from_root)| rel_from_root.as_str().is_empty());
+    if !at_invocation_root {
+        return Ok(DocClassification::RunInPlace);
+    }
+    // The `doc` entry of `defaultPackage` redirects every doc subcommand.
+    // Only the object form carries it: the string form covers the app
+    // commands and never `doc`. Any other declared shape passes through so
+    // the redirect reports it loudly, like the app commands.
+    match vp_static_config::resolve_static_config(cwd).get_declared("defaultPackage") {
+        Some(vp_static_config::FieldValue::Json(serde_json::Value::Object(map))) => {
+            if let Some(value) = map.get("doc") {
+                return Ok(DocClassification::Redirect(vp_static_config::FieldValue::Json(
+                    value.clone(),
+                )));
+            }
+        }
+        Some(vp_static_config::FieldValue::Json(serde_json::Value::String(_))) | None => {}
+        Some(invalid) => return Ok(DocClassification::Redirect(invalid)),
+    }
+    // The workspace documentation-package elicitation (rfcs/doc-command.md,
+    // Monorepos). Anything unresolvable keeps today's behavior.
+    let Ok((workspace_root, _)) = workspace else {
+        return Ok(DocClassification::RunInPlace);
     };
-    if !rel_from_root.as_str().is_empty()
-        || matches!(workspace_root.workspace_file, WorkspaceFile::NonWorkspacePackage(_))
-    {
-        return Ok(DocPackageClassification::RunInPlace);
+    if matches!(workspace_root.workspace_file, WorkspaceFile::NonWorkspacePackage(_)) {
+        return Ok(DocClassification::RunInPlace);
     }
     // A workspace root that declares its own marker is its own
     // documentation site (the root-VitePress layout); detection handles it.
-    let root_declares_marker = read_manifest(&workspace_root.path)
-        .is_some_and(|manifest| !vp_doc_cli::detect_providers(&manifest).is_empty());
-    if root_declares_marker {
-        return Ok(DocPackageClassification::RunInPlace);
+    if !vp_doc_cli::detect_providers_in_dir(workspace_root.path.as_path()).is_empty() {
+        return Ok(DocClassification::RunInPlace);
     }
     let graph =
         vt_workspace::load_package_graph(&workspace_root).map_err(|e| Error::Anyhow(e.into()))?;
@@ -321,53 +296,70 @@ fn classify_doc_packages(cwd: &AbsolutePath) -> Result<DocPackageClassification,
         .node_weights()
         .filter(|info| !info.path.as_str().is_empty())
         .filter_map(|info| {
-            let absolute = info.absolute_path.to_absolute_path_buf();
-            let manifest = read_manifest(&absolute)?;
-            let providers = vp_doc_cli::detect_providers(&manifest);
+            // The graph already parsed each member manifest; check the
+            // markers against its declared-dependency maps directly
+            // (`peerDependencies` stays excluded, its own field there).
+            let providers = vp_doc_cli::detect_providers_by(|marker| {
+                info.package_json.dependencies.contains_key(marker)
+                    || info.package_json.dev_dependencies.contains_key(marker)
+            });
             if providers.is_empty() {
                 return None;
             }
             Some(DocCandidateRow {
                 name: info.package_json.name.clone(),
                 path: vt_str::Str::from(info.path.as_str()),
-                absolute,
+                absolute: info.absolute_path.to_absolute_path_buf(),
                 providers: providers.iter().map(|p| p.id).collect::<Vec<_>>().join(", "),
             })
         })
         .collect();
     if rows.is_empty() {
-        return Ok(DocPackageClassification::RunInPlace);
+        return Ok(DocClassification::RunInPlace);
     }
     rows.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
-    Ok(DocPackageClassification::Elicit(rows))
+    Ok(DocClassification::Elicit(rows))
 }
 
-/// Elicit the documentation package for a bare `vp doc` action
-/// at a workspace root (rfcs/doc-command.md, Monorepos): the interactive
-/// picker filtered to provider-marker packages, or the non-interactive
-/// candidate listing with exit 1. `command` is the invocation to echo in
-/// the hints (`doc`, `doc build`, `doc preview`). Applies only where
-/// [`classify_doc_packages`] elicits; everywhere else the command runs in
-/// place, and a root without candidates falls through to the no-provider
-/// flow.
-pub(super) fn resolve_doc_package_target(
+/// Resolve a `vp doc` invocation directory (rfcs/doc-command.md): the
+/// `defaultPackage` `doc` entry behaves as an implicit `-C` for every doc
+/// subcommand; the documentation-package picker/listing applies to the
+/// actions only (`elicit` is false for `init`/`info`). `command` is the
+/// invocation to echo in hints (`doc`, `doc build`, `doc preview`).
+pub(super) fn resolve_doc_target(
     cwd: &AbsolutePath,
     command: &str,
+    elicit: bool,
 ) -> Result<AppTarget, Error> {
-    let rows = match classify_doc_packages(cwd)? {
-        DocPackageClassification::RunInPlace => return Ok(AppTarget::CurrentDir),
-        DocPackageClassification::Elicit(rows) => rows,
-    };
+    match classify_doc(cwd)? {
+        DocClassification::RunInPlace => Ok(AppTarget::CurrentDir),
+        DocClassification::Redirect(value) => Ok(resolve_default_package("doc", cwd, value)),
+        DocClassification::Elicit(_) if !elicit => Ok(AppTarget::CurrentDir),
+        DocClassification::Elicit(rows) => elicit_doc_package(&rows, command),
+    }
+}
 
+/// The picker or listing over the documentation-package candidates: the
+/// interactive picker filtered to marker-declaring packages, or the
+/// non-interactive candidate listing with exit 1.
+fn elicit_doc_package(rows: &[DocCandidateRow], command: &str) -> Result<AppTarget, Error> {
     if vp_shared::is_interactive_terminal() {
-        let Some(index) = run_doc_package_picker(&rows)? else {
+        let items: Vec<vt_select::SelectItem> = rows
+            .iter()
+            .map(|row| vt_select::SelectItem {
+                label: vt_str::format!("{} {}", row.name, row.path),
+                display_name: row.name.clone(),
+                description: row.path.clone(),
+                group: None,
+            })
+            .collect();
+        let prompt =
+            "Select a documentation package (\u{2191}/\u{2193}, Enter to run, type to search):";
+        let Some(index) = run_select(prompt, "doc-package-select", 12, &items)? else {
             return Ok(AppTarget::Exit(ExitStatus(130)));
         };
         let row = &rows[index];
-        // Deliberately stdout via println!: these lines belong to the
-        // command's own output stream, like the tool output that follows.
-        println!("Selected package: {} ({})", row.name, row.path);
-        println!("Tip: run this directly with `vp -C {} {command}`", row.path);
+        announce_selection(&row.name, &row.path, command);
         return Ok(AppTarget::Dir(row.absolute.clone()));
     }
 
@@ -381,65 +373,16 @@ pub(super) fn resolve_doc_package_target(
     let invocations: Vec<String> =
         rows.iter().map(|row| format!("vp -C {} {command}", row.path)).collect();
     let width = invocations.iter().map(String::len).max().unwrap_or(0);
-    for (invocation, row) in invocations.iter().zip(&rows) {
+    for (invocation, row) in invocations.iter().zip(rows) {
         output::raw_stderr(&format!("  {invocation:<width$}  ({})", row.providers));
     }
     Ok(AppTarget::Exit(ExitStatus(1)))
 }
 
-/// The documentation package picker: the package picker's look and
-/// milestone protocol, filtered rows, a doc-specific prompt.
-fn run_doc_package_picker(rows: &[DocCandidateRow]) -> Result<Option<usize>, Error> {
-    let emit_milestones =
-        std::env::var_os(env_vars::VP_EMIT_MILESTONES).is_some_and(|value| value == "1");
-    let items: Vec<vt_select::SelectItem> = rows
-        .iter()
-        .map(|row| vt_select::SelectItem {
-            label: vt_str::format!("{} {}", row.name, row.path),
-            display_name: row.name.clone(),
-            description: row.path.clone(),
-            group: None,
-        })
-        .collect();
-    let params = vt_select::SelectParams {
-        items: &items,
-        query: None,
-        header: None,
-        prompt: "Select a documentation package (\u{2191}/\u{2193}, Enter to run, type to search):",
-        page_size: 12,
-    };
-    let mut selected_index = 0usize;
-    let mut stdout = std::io::stdout();
-    let result = vt_select::select_list(
-        &mut stdout,
-        &params,
-        vt_select::Mode::Interactive { selected_index: &mut selected_index },
-        |state| {
-            if !emit_milestones {
-                return;
-            }
-            let milestone =
-                vt_str::format!("doc-package-select:{}:{}", state.query, state.selected_index);
-            emit_milestone_title(&milestone);
-        },
-    )
-    .map_err(Error::Anyhow)?;
-    Ok(match result {
-        vt_select::SelectResult::Selected => Some(selected_index),
-        vt_select::SelectResult::Cancelled => None,
-    })
-}
-
 /// Fuzzy package picker on `vt_select`, the same component behind the
 /// `vp run` task selector. Returns the selected row index, or `None` on
-/// Ctrl+C. When the PTY snapshot runner sets `VP_EMIT_MILESTONES=1`, every
-/// render emits a `package-select:<query>:<index>` milestone (an invisible
-/// window-title update) for the tests to synchronize on, same gate and
-/// protocol as packages/prompts/src/milestone.ts; real terminals never see
-/// the marker as content.
+/// Ctrl+C.
 fn run_package_picker(command: &str, rows: &[PackageRow]) -> Result<Option<usize>, Error> {
-    let emit_milestones =
-        std::env::var_os(env_vars::VP_EMIT_MILESTONES).is_some_and(|value| value == "1");
     let items: Vec<vt_select::SelectItem> = rows
         .iter()
         .map(|row| vt_select::SelectItem {
@@ -451,13 +394,25 @@ fn run_package_picker(command: &str, rows: &[PackageRow]) -> Result<Option<usize
         .collect();
     let prompt =
         format!("Select a package to {command} (\u{2191}/\u{2193}, Enter to run, type to search):");
-    let params = vt_select::SelectParams {
-        items: &items,
-        query: None,
-        header: None,
-        prompt: &prompt,
-        page_size: 12,
-    };
+    run_select(&prompt, "package-select", 12, &items)
+}
+
+/// The one `vt_select` wrapper behind every picker here: the
+/// `VP_EMIT_MILESTONES` gate, the `<prefix>:<query>:<index>` render
+/// milestone, and the Selected/Cancelled mapping live in one place so the
+/// pickers and the PTY snapshot protocol cannot drift apart. When the
+/// runner sets `VP_EMIT_MILESTONES=1`, every render emits the milestone as
+/// an invisible window-title update (same gate and protocol as
+/// packages/prompts/src/milestone.ts); real terminals never see it.
+pub(super) fn run_select(
+    prompt: &str,
+    milestone_prefix: &str,
+    page_size: usize,
+    items: &[vt_select::SelectItem],
+) -> Result<Option<usize>, Error> {
+    let emit_milestones =
+        std::env::var_os(env_vars::VP_EMIT_MILESTONES).is_some_and(|value| value == "1");
+    let params = vt_select::SelectParams { items, query: None, header: None, prompt, page_size };
     let mut selected_index = 0usize;
     let mut stdout = std::io::stdout();
     let result = vt_select::select_list(
@@ -469,7 +424,7 @@ fn run_package_picker(command: &str, rows: &[PackageRow]) -> Result<Option<usize
                 return;
             }
             let milestone =
-                vt_str::format!("package-select:{}:{}", state.query, state.selected_index);
+                vt_str::format!("{milestone_prefix}:{}:{}", state.query, state.selected_index);
             emit_milestone_title(&milestone);
         },
     )
@@ -478,6 +433,14 @@ fn run_package_picker(command: &str, rows: &[PackageRow]) -> Result<Option<usize
         vt_select::SelectResult::Selected => Some(selected_index),
         vt_select::SelectResult::Cancelled => None,
     })
+}
+
+/// The picker epilogue, deliberately stdout via `println!`: these lines
+/// belong to the command's own output stream, like the tool output that
+/// follows.
+fn announce_selection(name: &str, path: &str, command: &str) {
+    println!("Selected package: {name} ({path})");
+    println!("Tip: run this directly with `vp -C {path} {command}`");
 }
 
 /// Emits a render-milestone as a window-title update for the PTY snapshot
@@ -498,12 +461,27 @@ pub(super) fn emit_milestone_title(name: &str) {
     let _ = out.flush();
 }
 
-/// Pure predicate for the vp-script interception: would `resolve_app_target`
+/// Pure predicate for the vp-script interception: would target resolution
 /// do anything other than run in `cwd`? Never prints and never runs the
 /// picker. Slightly over-approximates (an empty workspace reports true), in
 /// which case the script merely spawns the real binary, which then behaves
 /// identically to a direct invocation.
 pub(super) fn needs_elicitation(subcommand: &SynthesizableSubcommand, cwd: &AbsolutePath) -> bool {
+    // Doc scripts: only `dev`, `build`, and `preview` synthesize — `init`,
+    // `info`, and parse errors spawn the real binary — and the
+    // `defaultPackage` `doc` redirect or the documentation-package
+    // elicitation spawns it too (rfcs/doc-command.md, Task Runner and
+    // Caching). A classification error counts as no elicitation; the
+    // synthesized command then surfaces its own error.
+    if let SynthesizableSubcommand::Doc { args } = subcommand {
+        return !matches!(
+            vp_doc_cli::parse_doc_args(args),
+            Ok(vp_doc_cli::DocInvocation::Action(_))
+        ) || matches!(
+            classify_doc(cwd),
+            Ok(DocClassification::Redirect(_) | DocClassification::Elicit(_))
+        );
+    }
     matches!(classify(subcommand, cwd), Classification::Elicit(..))
 }
 
@@ -685,10 +663,7 @@ pub(super) fn resolve_app_target(
             return Ok((AppTarget::Exit(ExitStatus(130)), None));
         };
         let row = &rows[index];
-        // Deliberately stdout via println!: these lines belong to the
-        // command's own output stream, like the tool output that follows.
-        println!("Selected package: {} ({})", row.name, row.path);
-        println!("Tip: run this directly with `vp -C {} {command}`", row.path);
+        announce_selection(&row.name, &row.path, command);
         return Ok((AppTarget::Dir(row.absolute.clone()), None));
     }
 

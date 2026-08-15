@@ -93,23 +93,9 @@ impl CommandHandler for VitePlusCommandHandler {
                 // target elicitation as direct invocations: spawn the real
                 // binary, which elicits (defaultPackage note, listing +
                 // exit 1) identically instead of silently running the root.
-                // `vp doc` scripts do the same when the `defaultPackage`
-                // `doc` entry redirects at the script's directory, or when
-                // the workspace documentation-package elicitation applies
-                // there (marker-declaring members and no root marker). Only
-                // `dev`, `build`, and `preview` synthesize: `init` and
-                // `info` scripts spawn the real binary too
-                // (rfcs/doc-command.md, Task Runner and Caching).
-                let doc_elicits = match &subcmd {
-                    SynthesizableSubcommand::Doc { args } => {
-                        !matches!(
-                            vp_doc_cli::parse_doc_args(args),
-                            Ok(vp_doc_cli::DocInvocation::Action(_))
-                        ) || super::app_target::doc_needs_elicitation(&command.cwd)
-                    }
-                    _ => false,
-                };
-                if doc_elicits || super::app_target::needs_elicitation(&subcmd, &command.cwd) {
+                // The predicate also owns the doc-script rules (redirect,
+                // documentation-package elicitation, init/info spawn).
+                if super::app_target::needs_elicitation(&subcmd, &command.cwd) {
                     return Ok(HandledCommand::Verbatim);
                 }
                 let resolved =

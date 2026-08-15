@@ -38,6 +38,16 @@ pub enum DocResolution {
     BuiltinVite { args: Vec<String> },
 }
 
+/// A resolved action: the selection that produced it and the translated
+/// execution. The caller renders the selection (the marker line) from the
+/// same result that executes, so the two cannot diverge.
+#[derive(Debug)]
+pub struct DocExecution {
+    pub provider: &'static ProviderDefinition,
+    pub source: SelectionSource,
+    pub resolution: DocResolution,
+}
+
 fn marker_list() -> String {
     DOC_PROVIDERS
         .iter()
@@ -97,9 +107,8 @@ pub fn select_provider(
         return Ok(ProviderSelection::Selected { provider, source: SelectionSource::Config });
     }
 
-    let detected = find_nearest_manifest(root)
-        .map(|nearest| detect_providers(&nearest.manifest))
-        .unwrap_or_default();
+    let detected =
+        find_nearest_manifest(root).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
     match detected.as_slice() {
         [] => Ok(ProviderSelection::NoProvider),
         [provider] => Ok(ProviderSelection::Selected { provider, source: SelectionSource::Marker }),
@@ -145,7 +154,7 @@ pub fn resolve(
     request: &DocRequest,
     cwd: &Path,
     context: Option<&DocConfigContext>,
-) -> Result<DocResolution, Error> {
+) -> Result<DocExecution, Error> {
     let (provider, source) = match select_provider(context, cwd)? {
         ProviderSelection::Selected { provider, source } => (provider, source),
         ProviderSelection::NoProvider => return Err(user_message(no_provider_message())),
@@ -178,8 +187,8 @@ pub fn resolve(
     let mut args = vec![request.action.as_str().to_string()];
     args.extend(request.args.iter().cloned());
 
-    match provider.target {
-        ProviderTarget::BuiltinVite => Ok(DocResolution::BuiltinVite { args }),
+    let resolution = match provider.target {
+        ProviderTarget::BuiltinVite => DocResolution::BuiltinVite { args },
         ProviderTarget::PackageBin { package_name, bin_name } => {
             let executable = if package_name == provider.marker {
                 marker
@@ -204,9 +213,10 @@ pub fn resolve(
                     "package `{package_name}` does not declare a `{bin_name}` bin"
                 )));
             };
-            Ok(DocResolution::PackageBin { bin_path: executable.root.join(bin_relative), args })
+            DocResolution::PackageBin { bin_path: executable.root.join(bin_relative), args }
         }
-    }
+    };
+    Ok(DocExecution { provider, source, resolution })
 }
 
 #[cfg(test)]
@@ -259,7 +269,7 @@ mod tests {
         install_vocs(dir.path());
         let context = context(dir.path(), Some("vocs"));
         let resolution = resolve(&build_request(), dir.path(), Some(&context)).unwrap();
-        let DocResolution::PackageBin { bin_path, args } = resolution else {
+        let DocResolution::PackageBin { bin_path, args } = resolution.resolution else {
             panic!("expected a package-bin execution");
         };
         assert!(bin_path.ends_with("node_modules/vocs/bin.js"));
@@ -389,7 +399,7 @@ mod tests {
         );
         let request = DocRequest { action: DocAction::Dev, args: vec!["--open".to_string()] };
         let resolution = resolve(&request, dir.path(), None).unwrap();
-        let DocResolution::BuiltinVite { args } = resolution else {
+        let DocResolution::BuiltinVite { args } = resolution.resolution else {
             panic!("expected the built-in Vite target");
         };
         assert_eq!(args, ["dev", "--open"]);
@@ -447,7 +457,7 @@ mod tests {
         )
         .unwrap();
         let resolution = resolve(&build_request(), dir.path(), None).unwrap();
-        let DocResolution::PackageBin { bin_path, .. } = resolution else {
+        let DocResolution::PackageBin { bin_path, .. } = resolution.resolution else {
             panic!("expected a package-bin execution");
         };
         assert!(bin_path.ends_with("node_modules/astro/astro.js"));
@@ -492,7 +502,7 @@ mod tests {
         assert!(message.contains("`defaultPackage.doc`"), "{message}");
 
         let resolution = resolve(&build_request(), &docs, None).unwrap();
-        let DocResolution::PackageBin { bin_path, .. } = resolution else {
+        let DocResolution::PackageBin { bin_path, .. } = resolution.resolution else {
             panic!("expected a package-bin execution");
         };
         assert!(bin_path.starts_with(&docs));

@@ -289,36 +289,31 @@ impl SubcommandResolver {
                     };
                 // Only `doc build` is a cacheable batch operation; the servers
                 // stay uncached like `dev`/`preview`.
-                let cache_config = match request.action {
-                    vp_doc_cli::DocAction::Build => {
-                        UserCacheConfig::with_config(EnabledCacheConfig {
-                            env: None,
-                            untracked_env: None,
-                            input: None,
-                            output: None,
-                        })
-                    }
-                    _ => UserCacheConfig::disabled(),
+                let cache_config = if request.action.is_server() {
+                    UserCacheConfig::disabled()
+                } else {
+                    UserCacheConfig::with_config(EnabledCacheConfig {
+                        env: None,
+                        untracked_env: None,
+                        input: None,
+                        output: None,
+                    })
                 };
                 let context = load_doc_context(cwd.as_path(), self.cli_options.as_ref()).await?;
-                // When dependency detection makes the selection, name the
+                let execution = vp_doc_cli::resolve(&request, cwd.as_path(), context.as_ref())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                // When dependency detection made the selection, name the
                 // marker before delegation; selections from `doc.provider`
                 // stay silent (rfcs/doc-command.md, Selection reporting).
                 // Stderr keeps the tool's stdout untouched.
-                if let Ok(vp_doc_cli::ProviderSelection::Selected {
-                    provider,
-                    source: vp_doc_cli::SelectionSource::Marker,
-                }) = vp_doc_cli::select_provider(context.as_ref(), cwd.as_path())
-                {
+                if execution.source == vp_doc_cli::SelectionSource::Marker {
                     eprintln!(
                         "Using provider `{}` (dependency marker `{}` in package.json)",
-                        provider.id, provider.marker
+                        execution.provider.id, execution.provider.marker
                     );
                 }
-                let resolution = vp_doc_cli::resolve(&request, cwd.as_path(), context.as_ref())
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-                match resolution {
+                match execution.resolution {
                     vp_doc_cli::DocResolution::PackageBin { bin_path, args } => {
                         let bin_path_str = bin_path
                             .to_str()

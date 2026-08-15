@@ -12,6 +12,7 @@ node-semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+vp_migration = { workspace = true }
 vp_static_config = { workspace = true }
 vt_path = { workspace = true }
 

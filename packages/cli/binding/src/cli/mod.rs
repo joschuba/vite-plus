@@ -42,17 +42,20 @@ use self::{
 };
 
 /// Execute a synthesizable subcommand directly (not through vite-task Session).
-/// No caching, no task graph, no dependency resolution.
+/// No caching, no task graph, no dependency resolution. `pre_retargeted` is
+/// true when the caller already applied an elicitation retarget (the doc
+/// dispatch), so the PWD handling below matches an app-command retarget.
 async fn execute_direct_subcommand(
     subcommand: SynthesizableSubcommand,
     cwd: &AbsolutePathBuf,
     options: Option<CliOptions>,
+    pre_retargeted: bool,
 ) -> Result<ExitStatus, Error> {
     // A bare app command at a workspace root resolves its target first
     // (defaultPackage, package listing); the command then runs as if invoked
     // in the resolved directory (rfcs/cwd-flag.md).
     let (target, workspace_root_hint) = app_target::resolve_app_target(&subcommand, cwd)?;
-    let retargeted = matches!(&target, app_target::AppTarget::Dir(_));
+    let retargeted = pre_retargeted || matches!(&target, app_target::AppTarget::Dir(_));
     let cwd = match &target {
         app_target::AppTarget::Exit(status) => return Ok(*status),
         app_target::AppTarget::Dir(dir) => dir,
@@ -387,58 +390,16 @@ pub async fn main(
 
     match cli_args {
         CLIArgs::Synthesizable(subcmd) => {
-            // `doc init` and `doc info` are Vite+-owned commands with no tool
-            // to delegate to; they run here instead of the resolver path.
-            // Parse errors fall through so the resolver reports them.
             if let SynthesizableSubcommand::Doc { args } = &subcmd {
-                match vp_doc_cli::parse_doc_args(args) {
-                    Ok(invocation) => {
-                        // The `defaultPackage` `doc` entry: every doc
-                        // subcommand at the invocation root behaves as an
-                        // implicit `-C` into the documentation package
-                        // (rfcs/doc-command.md, Configuration).
-                        let cwd = match app_target::resolve_doc_target(&cwd) {
-                            app_target::AppTarget::Exit(status) => return Ok(status),
-                            app_target::AppTarget::Dir(dir) => dir,
-                            app_target::AppTarget::CurrentDir => cwd.clone(),
-                        };
-                        match invocation {
-                            vp_doc_cli::DocInvocation::Init { args } => {
-                                return execute_doc_init(&args, &cwd, options.as_ref()).await;
-                            }
-                            vp_doc_cli::DocInvocation::Info { json } => {
-                                return execute_doc_info(json, &cwd, options.as_ref()).await;
-                            }
-                            vp_doc_cli::DocInvocation::Action(request) => {
-                                // The workspace documentation-package picker
-                                // and its non-interactive candidate listing
-                                // (rfcs/doc-command.md, Monorepos).
-                                let command = match request.action {
-                                    vp_doc_cli::DocAction::Dev => "doc",
-                                    vp_doc_cli::DocAction::Build => "doc build",
-                                    vp_doc_cli::DocAction::Preview => "doc preview",
-                                };
-                                let cwd =
-                                    match app_target::resolve_doc_package_target(&cwd, command)? {
-                                        app_target::AppTarget::Exit(status) => return Ok(status),
-                                        app_target::AppTarget::Dir(dir) => dir,
-                                        app_target::AppTarget::CurrentDir => cwd,
-                                    };
-                                // Interactive no-provider flow: offer
-                                // initialization, then continue with the
-                                // requested action
-                                // (rfcs/doc-command.md, No provider).
-                                if let Some(exit) =
-                                    offer_doc_init_for_action(&cwd, options.as_ref()).await?
-                                {
-                                    return Ok(exit);
-                                }
-                                script_note::print(raw_subcommand.as_deref(), &cwd);
-                                return execute_direct_subcommand(subcmd, &cwd, options).await;
-                            }
-                        }
+                match dispatch_doc(args, &cwd, options.as_ref()).await? {
+                    Some(DocDispatch::Done(status)) => return Ok(status),
+                    Some(DocDispatch::Run { cwd: doc_cwd, retargeted }) => {
+                        script_note::print(raw_subcommand.as_deref(), &doc_cwd);
+                        return execute_direct_subcommand(subcmd, &doc_cwd, options, retargeted)
+                            .await;
                     }
-                    Err(_) => {}
+                    // Parse errors fall through so the resolver reports them.
+                    None => {}
                 }
             }
             // Only the built-ins can be mistaken for a script. `run`/`cache`
@@ -447,7 +408,7 @@ pub async fn main(
             // through the package manager, so redirecting those to `vpr` would
             // be wrong; and `exec` names a binary rather than a task.
             script_note::print(raw_subcommand.as_deref(), &cwd);
-            execute_direct_subcommand(subcmd, &cwd, options).await
+            execute_direct_subcommand(subcmd, &cwd, options, false).await
         }
         CLIArgs::ViteTask(command) => execute_vite_task_command(command, cwd, options).await,
         CLIArgs::PackageManager(pm) => execute_pm_command(pm, &cwd, options.as_ref()).await,
@@ -456,14 +417,82 @@ pub async fn main(
     }
 }
 
+/// How the `vp doc` dispatch concluded.
+enum DocDispatch {
+    /// The invocation finished (init, info, an elicitation exit, or a
+    /// declined no-provider offer).
+    Done(ExitStatus),
+    /// Run the action through the generic direct path at this directory.
+    /// `retargeted` is true when the redirect or the picker moved it.
+    Run { cwd: AbsolutePathBuf, retargeted: bool },
+}
+
+/// The `vp doc` pre-pass (rfcs/doc-command.md): the `defaultPackage` `doc`
+/// redirect and the documentation-package elicitation settle the effective
+/// root, `init` and `info` execute here, and an interactive action without
+/// a provider gets the initialization offer. Returns `None` on a parse
+/// error so the resolver reports it.
+async fn dispatch_doc(
+    args: &[String],
+    cwd: &AbsolutePathBuf,
+    options: Option<&CliOptions>,
+) -> Result<Option<DocDispatch>, Error> {
+    let Ok(invocation) = vp_doc_cli::parse_doc_args(args) else {
+        return Ok(None);
+    };
+    let command = match &invocation {
+        vp_doc_cli::DocInvocation::Action(request) => match request.action {
+            vp_doc_cli::DocAction::Dev => "doc",
+            vp_doc_cli::DocAction::Build => "doc build",
+            vp_doc_cli::DocAction::Preview => "doc preview",
+        },
+        vp_doc_cli::DocInvocation::Init { .. } => "doc init",
+        vp_doc_cli::DocInvocation::Info { .. } => "doc info",
+    };
+    let elicit = matches!(invocation, vp_doc_cli::DocInvocation::Action(_));
+    let target = app_target::resolve_doc_target(cwd, command, elicit)?;
+    let retargeted = matches!(&target, app_target::AppTarget::Dir(_));
+    let cwd = match target {
+        app_target::AppTarget::Exit(status) => return Ok(Some(DocDispatch::Done(status))),
+        app_target::AppTarget::Dir(dir) => dir,
+        app_target::AppTarget::CurrentDir => cwd.clone(),
+    };
+    let status = match invocation {
+        vp_doc_cli::DocInvocation::Init { provider } => {
+            execute_doc_init(provider, &cwd, options).await?
+        }
+        vp_doc_cli::DocInvocation::Info { json } => execute_doc_info(json, &cwd, options).await?,
+        vp_doc_cli::DocInvocation::Action(_) => {
+            // Interactive no-provider flow: offer initialization, then
+            // continue with the requested action (rfcs/doc-command.md, No
+            // provider).
+            match offer_doc_init_for_action(&cwd, options).await? {
+                Some(exit) => exit,
+                None => return Ok(Some(DocDispatch::Run { cwd, retargeted })),
+            }
+        }
+    };
+    Ok(Some(DocDispatch::Done(status)))
+}
+
+/// Render a `vp_doc_cli` error: user messages print behind the `error:`
+/// prefix and exit 1; anything else propagates.
+fn render_doc_error(error: vp_doc_cli::Error) -> Result<ExitStatus, Error> {
+    match error {
+        vp_doc_cli::Error::UserMessage(message) => {
+            eprintln!("error: {message}");
+            Ok(ExitStatus(1))
+        }
+        other => Err(Error::Anyhow(anyhow::Error::new(other))),
+    }
+}
+
 /// Select prompt over the init-capable providers, VitePress recommended
-/// first. Returns the chosen provider, or `None` on cancel. Reuses
-/// `vt_select` and the milestone protocol from the package picker.
+/// first. Returns the chosen provider, or `None` on cancel. Reuses the
+/// shared picker and its milestone protocol.
 fn run_doc_provider_picker() -> Result<Option<&'static vp_doc_cli::ProviderDefinition>, Error> {
     let providers: Vec<&'static vp_doc_cli::ProviderDefinition> =
         vp_doc_cli::init_providers().collect();
-    let emit_milestones =
-        std::env::var_os(env_vars::VP_EMIT_MILESTONES).is_some_and(|value| value == "1");
     let items: Vec<vt_select::SelectItem> = providers
         .iter()
         .enumerate()
@@ -479,33 +508,13 @@ fn run_doc_provider_picker() -> Result<Option<&'static vp_doc_cli::ProviderDefin
             }
         })
         .collect();
-    let params = vt_select::SelectParams {
-        items: &items,
-        query: None,
-        header: None,
-        prompt: "Select a documentation provider (\u{2191}/\u{2193}, Enter to confirm):",
-        page_size: 8,
-    };
-    let mut selected_index = 0usize;
-    let mut stdout = std::io::stdout();
-    let result = vt_select::select_list(
-        &mut stdout,
-        &params,
-        vt_select::Mode::Interactive { selected_index: &mut selected_index },
-        |state| {
-            if !emit_milestones {
-                return;
-            }
-            let milestone =
-                vt_str::format!("doc-provider-select:{}:{}", state.query, state.selected_index);
-            app_target::emit_milestone_title(&milestone);
-        },
-    )
-    .map_err(Error::Anyhow)?;
-    Ok(match result {
-        vt_select::SelectResult::Selected => Some(providers[selected_index]),
-        vt_select::SelectResult::Cancelled => None,
-    })
+    let picked = app_target::run_select(
+        "Select a documentation provider (\u{2191}/\u{2193}, Enter to confirm):",
+        "doc-provider-select",
+        8,
+        &items,
+    )?;
+    Ok(picked.map(|index| providers[index]))
 }
 
 /// The interactive no-provider flow for an action: offer to
@@ -534,7 +543,7 @@ async fn offer_doc_init_for_action(
     let Some(provider) = run_doc_provider_picker()? else {
         return Ok(Some(ExitStatus(1)));
     };
-    let status = execute_doc_init(&[provider.id.to_string()], cwd, options).await?;
+    let status = execute_doc_init(Some(provider.id.to_string()), cwd, options).await?;
     if status.0 != 0 {
         return Ok(Some(status));
     }
@@ -554,28 +563,22 @@ fn doc_context_error(error: anyhow::Error) -> Result<ExitStatus, Error> {
 /// Execute `vp doc init`: scaffold through `vp_doc_cli`, then install the
 /// provider's dependencies through the normal package-manager dispatch.
 async fn execute_doc_init(
-    args: &[String],
+    provider: Option<String>,
     cwd: &AbsolutePathBuf,
     options: Option<&CliOptions>,
 ) -> Result<ExitStatus, Error> {
     // An interactive session can omit the provider ID and pick from the
     // select prompt (rfcs/doc-command.md, Initialization).
-    let mut args = args.to_vec();
-    let named_provider = args.first().is_some_and(|arg| !arg.starts_with('-'));
-    if !named_provider && vp_shared::is_interactive_terminal() {
-        let Some(provider) = run_doc_provider_picker()? else {
+    let mut provider = provider;
+    if provider.is_none() && vp_shared::is_interactive_terminal() {
+        let Some(picked) = run_doc_provider_picker()? else {
             return Ok(ExitStatus(1));
         };
-        args.insert(0, provider.id.to_string());
+        provider = Some(picked.id.to_string());
     }
-    let args = args.as_slice();
-    let outcome = match vp_doc_cli::init_scaffold(args, cwd.as_path()) {
+    let outcome = match vp_doc_cli::init_scaffold(provider.as_deref(), cwd.as_path()) {
         Ok(outcome) => outcome,
-        Err(vp_doc_cli::Error::UserMessage(message)) => {
-            eprintln!("error: {message}");
-            return Ok(ExitStatus(1));
-        }
-        Err(error) => return Err(Error::Anyhow(anyhow::Error::new(error))),
+        Err(error) => return render_doc_error(error),
     };
 
     match outcome {
@@ -629,11 +632,7 @@ async fn execute_doc_init(
                         provider.id, provider.display_name
                     );
                 }
-                Err(vp_doc_cli::Error::UserMessage(message)) => {
-                    eprintln!("error: {message}");
-                    return Ok(ExitStatus(1));
-                }
-                Err(error) => return Err(Error::Anyhow(anyhow::Error::new(error))),
+                Err(error) => return render_doc_error(error),
             }
 
             println!("{} is ready. Run `vp doc` to start the dev server.", provider.display_name);
@@ -655,62 +654,54 @@ async fn execute_doc_info(
     };
     let report = match vp_doc_cli::info_report(cwd.as_path(), context.as_ref()) {
         Ok(report) => report,
-        Err(vp_doc_cli::Error::UserMessage(message)) => {
-            eprintln!("error: {message}");
-            return Ok(ExitStatus(1));
-        }
-        Err(error) => return Err(Error::Anyhow(anyhow::Error::new(error))),
+        Err(error) => return render_doc_error(error),
     };
     if json {
-        let rendered = serde_json::to_string_pretty(&report)
+        let rendered = serde_json::to_string_pretty(&report.to_json())
             .map_err(|error| Error::Anyhow(anyhow::Error::new(error)))?;
         println!("{rendered}");
-    } else if let (
-        Some(provider),
-        Some(display_name),
-        Some(source),
-        Some(target),
-        Some(tool),
-        Some(commands),
-    ) = (
-        report.provider,
-        report.display_name,
-        report.source.as_ref(),
-        report.target,
-        report.tool.as_ref(),
-        report.commands.as_ref(),
-    ) {
-        println!("Provider:  {provider} ({display_name})");
-        match (source.kind, source.marker) {
-            ("config", _) => println!("Source:    `doc.provider` in vite.config"),
-            (_, Some(marker)) => {
-                println!("Source:    dependency marker `{marker}` in package.json");
-            }
-            _ => {}
-        }
-        match tool.version.as_deref() {
-            Some(version) => println!("Tool:      {}@{version} ({target})", tool.package),
-            None => println!("Tool:      {} (not installed) ({target})", tool.package),
-        }
-        if tool.version.is_some() && !tool.version_supported {
-            match tool.supported_range {
-                Some(range) => {
-                    println!("Warning:   installed version is unsupported (requires `{range}`)");
+        return Ok(if report.resolved() { ExitStatus::SUCCESS } else { ExitStatus(1) });
+    }
+    match &report {
+        vp_doc_cli::DocInfoReport::Resolved(info) => {
+            let provider = info.provider;
+            println!("Provider:  {} ({})", provider.id, provider.display_name);
+            match info.source {
+                vp_doc_cli::SelectionSource::Config => {
+                    println!("Source:    `doc.provider` in vite.config");
                 }
-                None => println!("Warning:   installed version is unsupported"),
+                vp_doc_cli::SelectionSource::Marker => {
+                    println!("Source:    dependency marker `{}` in package.json", provider.marker);
+                }
             }
+            let target = provider.target.as_str();
+            match info.tool.version.as_deref() {
+                Some(version) => println!("Tool:      {}@{version} ({target})", info.tool.package),
+                None => println!("Tool:      {} (not installed) ({target})", info.tool.package),
+            }
+            if info.tool.version.is_some() && !info.tool.version_supported {
+                match info.tool.supported_range {
+                    Some(range) => {
+                        println!("Warning:   installed version is unsupported (requires `{range}`)")
+                    }
+                    None => println!("Warning:   installed version is unsupported"),
+                }
+            }
+            let commands: Vec<&str> =
+                provider.capabilities.iter().map(|action| action.as_str()).collect();
+            println!("Commands:  {}", commands.join(", "));
         }
-        println!("Commands:  {}", commands.join(", "));
-    } else if let Some(candidates) = report.candidates.as_ref() {
-        if candidates.is_empty() {
-            println!(
-                "No documentation provider is configured. Run `vp doc init <provider>` to set one up."
-            );
-        } else {
-            println!(
-                "Multiple documentation providers are declared: {}. Remove the markers you do not use, or set `doc.provider` in vite.config.ts.",
-                candidates.join(", ")
-            );
+        vp_doc_cli::DocInfoReport::Unresolved { candidates } => {
+            if candidates.is_empty() {
+                println!(
+                    "No documentation provider is configured. Run `vp doc init <provider>` to set one up."
+                );
+            } else {
+                println!(
+                    "Multiple documentation providers are declared: {}. Remove the markers you do not use, or set `doc.provider` in vite.config.ts.",
+                    candidates.join(", ")
+                );
+            }
         }
     }
     Ok(if report.resolved() { ExitStatus::SUCCESS } else { ExitStatus(1) })
