@@ -125,5 +125,5 @@ vp = "local"
 cwd = "failing_tool"
 comment = "A failing tool run keeps its own exit status; Vite+ adds nothing."
 steps = [
-  { argv = ["vp", "doc", "build"], continue-on-failure = true },
+  { argv = ["vp", "doc", "build"], timeout = 30000, continue-on-failure = true },
 ]
