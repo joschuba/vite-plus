@@ -32,6 +32,7 @@ Vite+ extends the basic Vite configuration with these additions:
 - [`check`](/config/check) for `vp check` defaults
 - [`test`](/config/test) for Vitest
 - [`pack`](/config/pack) for tsdown
+- [`doc`](/config/doc) for the `vp doc` provider
 - [`staged`](/config/staged) for staged-file checks
 - [`defaultPackage`](#defaultpackage) for the default target of bare app commands at a workspace root
 
@@ -45,4 +46,4 @@ export default {
 };
 ```
 
-vp reads the values without executing the config, so `defaultPackage` also works at repository roots with no vite-plus dependency (for example a Laravel or Rails repo whose Vite app lives in `frontend/`, with vite-plus installed only there). That static read is why the values must stay plain string literals rather than expressions. An explicit `-C` or positional target always wins over the config.
+vp reads the values without executing the config, so `defaultPackage` also works at repository roots with no vite-plus dependency (for example a Laravel or Rails repo whose Vite app lives in `frontend/`, with vite-plus installed only there). That static read is why the values must stay plain string literals rather than expressions. An explicit `-C` or positional target always wins over the config. An object form maps commands individually, and its `doc` entry names the documentation package for [`vp doc`](/config/doc).

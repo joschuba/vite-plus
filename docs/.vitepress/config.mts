@@ -209,6 +209,7 @@ export default extendConfig(
                 { text: 'Test', link: '/config/test' },
                 { text: 'Build', link: '/config/build' },
                 { text: 'Pack', link: '/config/pack' },
+                { text: 'Doc', link: '/config/doc' },
                 { text: 'Staged', link: '/config/staged' },
               ],
             },
