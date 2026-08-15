@@ -459,7 +459,7 @@ async fn dispatch_doc(
     };
     let status = match invocation {
         vp_doc_cli::DocInvocation::Init { provider } => {
-            execute_doc_init(provider, &cwd, options).await?
+            execute_doc_init(provider, &cwd, options, true).await?
         }
         vp_doc_cli::DocInvocation::Info { json } => execute_doc_info(json, &cwd, options).await?,
         vp_doc_cli::DocInvocation::Action(_) => {
@@ -543,7 +543,7 @@ async fn offer_doc_init_for_action(
     let Some(provider) = run_doc_provider_picker()? else {
         return Ok(Some(ExitStatus(1)));
     };
-    let status = execute_doc_init(Some(provider.id.to_string()), cwd, options).await?;
+    let status = execute_doc_init(Some(provider.id.to_string()), cwd, options, false).await?;
     if status.0 != 0 {
         return Ok(Some(status));
     }
@@ -566,6 +566,10 @@ async fn execute_doc_init(
     provider: Option<String>,
     cwd: &AbsolutePathBuf,
     options: Option<&CliOptions>,
+    // False in the no-provider continue-flow, where the requested action
+    // starts right after: a "run `vp doc`" hint there would name the very
+    // command already running.
+    print_next_step: bool,
 ) -> Result<ExitStatus, Error> {
     // An interactive session can omit the provider ID and pick from the
     // select prompt (rfcs/doc-command.md, Initialization).
@@ -635,7 +639,14 @@ async fn execute_doc_init(
                 Err(error) => return render_doc_error(error),
             }
 
-            println!("{} is ready. Run `vp doc` to start the dev server.", provider.display_name);
+            if print_next_step {
+                println!(
+                    "{} is ready. Run `vp doc` to start the dev server.",
+                    provider.display_name
+                );
+            } else {
+                println!("{} is ready.", provider.display_name);
+            }
             Ok(ExitStatus::SUCCESS)
         }
     }

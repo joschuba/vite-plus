@@ -277,6 +277,39 @@ mod tests {
     }
 
     #[test]
+    fn markers_are_detected_from_the_dependencies_field() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "dependencies": { "vocs": "^2.0.0" } }"#);
+        install_vocs(dir.path());
+        let request =
+            DocRequest { action: DocAction::Preview, args: vec!["--port".into(), "4173".into()] };
+        let resolution = resolve(&request, dir.path(), None).unwrap().resolution;
+        let DocResolution::PackageBin { args, .. } = resolution else {
+            panic!("expected a package-bin execution");
+        };
+        // Preview translates like the other actions: the action name, then
+        // the forwarded args verbatim.
+        assert_eq!(args, ["preview", "--port", "4173"]);
+    }
+
+    #[test]
+    fn a_malformed_nearest_manifest_declares_nothing() {
+        // The walk stops at the first package.json; a malformed one must
+        // not pick up a marker from an ancestor package
+        // (rfcs/doc-command.md, Monorepos).
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vitepress": "^2.0.0-0" } }"#);
+        let nested = dir.path().join("packages/docs");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("package.json"), "{ not json").unwrap();
+        let error = resolve(&build_request(), &nested, None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("no documentation provider is configured"), "{message}");
+    }
+
+    #[test]
     fn peer_only_markers_are_not_detected() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), r#"{ "peerDependencies": { "vitepress": "^2.0.0-0" } }"#);

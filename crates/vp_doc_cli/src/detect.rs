@@ -13,16 +13,19 @@ use crate::providers::{DOC_PROVIDERS, ProviderDefinition};
 // (rfcs/doc-command.md, Provider Selection).
 const DEPENDENCY_FIELDS: &[&str] = &["dependencies", "devDependencies"];
 
-/// The nearest `package.json` manifest, walking up from the start directory.
+/// The nearest `package.json` manifest, walking up from the start
+/// directory. The walk stops at the first `package.json` file: detection
+/// reads only the nearest manifest, and a malformed one declares nothing
+/// (rfcs/doc-command.md, Monorepos). Continuing past it could select a
+/// provider from an ancestor package.
 pub(crate) fn find_nearest_manifest(start: &Path) -> Option<serde_json::Value> {
     let mut dir = start.to_path_buf();
     loop {
         let manifest_path = dir.join("package.json");
-        if let Ok(contents) = fs::read_to_string(&manifest_path) {
-            // A malformed manifest cannot declare a provider; keep walking up.
-            if let Ok(manifest) = serde_json::from_str(&contents) {
-                return Some(manifest);
-            }
+        if manifest_path.is_file() {
+            return fs::read_to_string(&manifest_path)
+                .ok()
+                .and_then(|contents| serde_json::from_str(&contents).ok());
         }
         if !dir.pop() {
             return None;
