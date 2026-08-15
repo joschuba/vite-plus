@@ -265,10 +265,14 @@ pub(super) fn resolve_doc_target(cwd: &AbsolutePath) -> AppTarget {
     }
 }
 
-/// Pure predicate for the vp-script interception: would [`resolve_doc_target`]
-/// redirect or error at this directory? Never prints.
+/// Pure predicate for the vp-script interception: would the
+/// `defaultPackage` `doc` redirect or the workspace documentation-package
+/// elicitation apply at this directory? Never prints and never runs the
+/// picker; a classification error counts as no elicitation, in which case
+/// the synthesized command surfaces its own error.
 pub(super) fn doc_needs_elicitation(cwd: &AbsolutePath) -> bool {
     classify_doc(cwd).is_some()
+        || matches!(classify_doc_packages(cwd), Ok(DocPackageClassification::Elicit(_)))
 }
 
 /// A workspace package that declares a documentation provider marker.
@@ -284,32 +288,32 @@ fn read_manifest(dir: &AbsolutePath) -> Option<serde_json::Value> {
     serde_json::from_str(&contents).ok()
 }
 
-/// Elicit the documentation package for a bare `vp doc` lifecycle command
-/// at a workspace root (rfcs/doc-command.md, Monorepos): the interactive
-/// picker filtered to provider-marker packages, or the non-interactive
-/// candidate listing with exit 1. `command` is the invocation to echo in
-/// the hints (`doc`, `doc build`, `doc preview`). Applies only at a real
-/// workspace root whose own manifest declares no marker; everywhere else
-/// the command runs in place, and a root without candidates falls through
-/// to the no-provider flow.
-pub(super) fn resolve_doc_package_target(
-    cwd: &AbsolutePath,
-    command: &str,
-) -> Result<AppTarget, Error> {
+/// The workspace documentation-package classification at a directory.
+enum DocPackageClassification {
+    /// Not a real workspace root, the root declares its own marker, or no
+    /// member declares one: the command runs in place.
+    RunInPlace,
+    /// Marker-declaring members exist: picker or listing territory.
+    Elicit(Vec<DocCandidateRow>),
+}
+
+/// Classify a directory for the workspace documentation-package
+/// elicitation (rfcs/doc-command.md, Monorepos). Pure: never prints.
+fn classify_doc_packages(cwd: &AbsolutePath) -> Result<DocPackageClassification, Error> {
     let Ok((workspace_root, rel_from_root)) = vt_workspace::find_workspace_root(cwd) else {
-        return Ok(AppTarget::CurrentDir);
+        return Ok(DocPackageClassification::RunInPlace);
     };
     if !rel_from_root.as_str().is_empty()
         || matches!(workspace_root.workspace_file, WorkspaceFile::NonWorkspacePackage(_))
     {
-        return Ok(AppTarget::CurrentDir);
+        return Ok(DocPackageClassification::RunInPlace);
     }
     // A workspace root that declares its own marker is its own
     // documentation site (the root-VitePress layout); detection handles it.
     let root_declares_marker = read_manifest(&workspace_root.path)
         .is_some_and(|manifest| !vp_doc_cli::detect_providers(&manifest).is_empty());
     if root_declares_marker {
-        return Ok(AppTarget::CurrentDir);
+        return Ok(DocPackageClassification::RunInPlace);
     }
     let graph =
         vt_workspace::load_package_graph(&workspace_root).map_err(|e| Error::Anyhow(e.into()))?;
@@ -332,9 +336,28 @@ pub(super) fn resolve_doc_package_target(
         })
         .collect();
     if rows.is_empty() {
-        return Ok(AppTarget::CurrentDir);
+        return Ok(DocPackageClassification::RunInPlace);
     }
     rows.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
+    Ok(DocPackageClassification::Elicit(rows))
+}
+
+/// Elicit the documentation package for a bare `vp doc` action
+/// at a workspace root (rfcs/doc-command.md, Monorepos): the interactive
+/// picker filtered to provider-marker packages, or the non-interactive
+/// candidate listing with exit 1. `command` is the invocation to echo in
+/// the hints (`doc`, `doc build`, `doc preview`). Applies only where
+/// [`classify_doc_packages`] elicits; everywhere else the command runs in
+/// place, and a root without candidates falls through to the no-provider
+/// flow.
+pub(super) fn resolve_doc_package_target(
+    cwd: &AbsolutePath,
+    command: &str,
+) -> Result<AppTarget, Error> {
+    let rows = match classify_doc_packages(cwd)? {
+        DocPackageClassification::RunInPlace => return Ok(AppTarget::CurrentDir),
+        DocPackageClassification::Elicit(rows) => rows,
+    };
 
     if vp_shared::is_interactive_terminal() {
         let Some(index) = run_doc_package_picker(&rows)? else {
