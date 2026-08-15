@@ -255,6 +255,17 @@ mod tests {
     }
 
     #[test]
+    fn peer_only_markers_are_not_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "peerDependencies": { "vitepress": "^2.0.0-0" } }"#);
+        let error = resolve(&build_request(), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("no documentation provider is configured"), "{message}");
+    }
+
+    #[test]
     fn multiple_markers_are_a_misconfiguration() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(

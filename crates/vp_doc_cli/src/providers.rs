@@ -69,7 +69,7 @@ pub struct ProviderDefinition {
 pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
     ProviderDefinition {
         id: "vitepress",
-        display_name: "VitePress 2",
+        display_name: "VitePress",
         marker: "vitepress",
         marker_hint: Some("major version 2"),
         // `2.0.0-alpha.18` is the first VitePress release on Vite 8; the
@@ -155,7 +155,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         // the RFC's own example. No init metadata, so it stays out of the
         // init prompt and hint list.
         id: "vuepress",
-        display_name: "VuePress 2",
+        display_name: "VuePress",
         marker: "vuepress",
         marker_hint: Some("major version 2"),
         // `2.0.0-rc.27` is the first RC whose Vite bundler declares Vite 8.

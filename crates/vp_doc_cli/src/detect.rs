@@ -8,8 +8,10 @@ use std::{
 
 use crate::providers::{DOC_PROVIDERS, ProviderDefinition};
 
-const DEPENDENCY_FIELDS: &[&str] =
-    &["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+// `peerDependencies` is deliberately excluded: a theme or plugin package
+// peers on its tool without being a documentation site
+// (rfcs/doc-command.md, Provider Selection).
+const DEPENDENCY_FIELDS: &[&str] = &["dependencies", "devDependencies"];
 
 /// The nearest `package.json`, walking up from the start directory.
 #[derive(Debug)]
