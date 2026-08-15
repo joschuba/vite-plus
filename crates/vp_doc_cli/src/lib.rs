@@ -1,6 +1,6 @@
 //! Documentation-provider infrastructure for `vp doc` (rfcs/doc-command.md).
 //!
-//! Follows the `vp_pm_cli` pattern: a data-only provider registry, manifest
+//! Follows the `vp_pm_cli` pattern: data-only provider definitions, manifest
 //! detection, and command translation live here. Process execution, the
 //! package-manager dispatch for `init`, and user-facing printing stay with
 //! the caller.

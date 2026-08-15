@@ -23,9 +23,10 @@ import type { StagedConfig } from './staged-config.ts';
 import { CONFIG_METADATA_ENV, VITEST_VERSION } from './utils/constants.ts';
 
 /**
- * A documentation provider `vp doc` can select (rfcs/doc-command.md).
+ * A documentation provider `vp doc` can select (rfcs/doc-command.md). The
+ * PoC ships a VuePress entry the RFC defers.
  */
-export type DocProvider = 'vitepress' | 'ox-content' | 'vuepress';
+export type DocProvider = 'vitepress' | 'vocs' | 'starlight' | 'ox-content' | 'vuepress';
 
 /**
  * The `doc` block: provider selection for `vp doc`. The workspace-root

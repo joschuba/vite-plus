@@ -1,9 +1,10 @@
-//! Data-only registry of documentation providers.
+//! Data-only definitions of the built-in documentation providers.
 //!
-//! PoC scope (rfcs/doc-command.md): VitePress 2 as a package-bin target and
-//! Ox Content as the built-in Vite target, plus a VuePress entry that
-//! exercises the capability gate. The remaining RFC providers join by adding
-//! entries here; detection and resolution stay generic.
+//! PoC scope (rfcs/doc-command.md): the RFC's built-in providers
+//! (VitePress 2, Vocs, Starlight, Ox Content) with their pinned Vite 8
+//! floors, plus a VuePress entry that exercises the capability gate.
+//! Detection and resolution stay generic; new providers join by adding
+//! definitions here.
 
 use crate::cli::DocAction;
 
@@ -51,8 +52,13 @@ pub struct ProviderDefinition {
     pub marker: &'static str,
     /// Extra hint rendered next to the marker in the no-provider error.
     pub marker_hint: Option<&'static str>,
-    /// Supported npm semver range for the marker package.
+    /// Supported npm semver range for the marker package. The floor is the
+    /// tool's first release on Vite 8 (rfcs/doc-command.md, The Vite
+    /// requirement); `None` means every published release satisfies it.
     pub version_range: Option<&'static str>,
+    /// The Vite range the tool's supported releases run on. Declarative
+    /// data; enforcement rides `version_range`.
+    pub vite_requirement: &'static str,
     /// Lifecycle commands this provider supports. `build` is always required.
     pub capabilities: &'static [DocAction],
     pub target: ProviderTarget,
@@ -66,7 +72,10 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         display_name: "VitePress 2",
         marker: "vitepress",
         marker_hint: Some("major version 2"),
-        version_range: Some(">=2.0.0-0 <3.0.0"),
+        // `2.0.0-alpha.18` is the first VitePress release on Vite 8; the
+        // earlier 2.0 alphas run Vite 7 or older.
+        version_range: Some(">=2.0.0-alpha.18 <3.0.0"),
+        vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::PackageBin { package_name: "vitepress", bin_name: "vitepress" },
         init: Some(ProviderInit {
@@ -81,11 +90,44 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         }),
     },
     ProviderDefinition {
+        // Vocs 1 pins Vite 7; Vocs 2 is the first line that declares a
+        // `vite: ^8` peer. Init support is not planned (rfcs/doc-command.md).
+        id: "vocs",
+        display_name: "Vocs",
+        marker: "vocs",
+        marker_hint: Some("major version 2"),
+        version_range: Some(">=2.0.0"),
+        vite_requirement: ">=8.0.0",
+        capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
+        target: ProviderTarget::PackageBin { package_name: "vocs", bin_name: "vocs" },
+        init: None,
+    },
+    ProviderDefinition {
+        // The marker and the executable differ: Starlight is detected
+        // through `@astrojs/starlight` and executed through `astro`.
+        // `0.41.0` is the first release whose Astro peer admits only
+        // Astro 7, the first Astro major on Vite 8. Init support is a PoC
+        // follow-up; the RFC ships it in version 1.
+        id: "starlight",
+        display_name: "Starlight",
+        marker: "@astrojs/starlight",
+        marker_hint: None,
+        version_range: Some(">=0.41.0"),
+        vite_requirement: ">=8.0.0",
+        capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
+        target: ProviderTarget::PackageBin { package_name: "astro", bin_name: "astro" },
+        init: None,
+    },
+    ProviderDefinition {
+        // Every published release targets Vite 8, and from 1.1.0 the
+        // plugin's `vite` peer aliases the Vite+ core package, so no
+        // version floor is needed.
         id: "ox-content",
         display_name: "Ox Content",
         marker: "@ox-content/vite-plugin",
         marker_hint: None,
         version_range: None,
+        vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::BuiltinVite,
         init: Some(ProviderInit {
@@ -116,7 +158,9 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         display_name: "VuePress 2",
         marker: "vuepress",
         marker_hint: Some("major version 2"),
-        version_range: Some(">=2.0.0-0 <3.0.0"),
+        // `2.0.0-rc.27` is the first RC whose Vite bundler declares Vite 8.
+        version_range: Some(">=2.0.0-rc.27 <3.0.0"),
+        vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build],
         target: ProviderTarget::PackageBin { package_name: "vuepress", bin_name: "vuepress" },
         init: None,

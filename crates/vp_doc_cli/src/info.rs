@@ -61,11 +61,28 @@ fn build_report(
     source: SelectionSource,
     root: &Path,
 ) -> DocInfoReport {
-    let installed = find_installed_package(provider.marker, root);
-    let version = installed.as_ref().and_then(|package| package.version()).map(str::to_string);
-    let version_supported = version.as_deref().is_some_and(|version| {
+    // The version gate applies to the marker package; the reported tool is
+    // the executable package, which differs for host-bin providers such as
+    // Starlight (marker `@astrojs/starlight`, tool `astro`).
+    let marker_version = find_installed_package(provider.marker, root)
+        .as_ref()
+        .and_then(|package| package.version())
+        .map(str::to_string);
+    let version_supported = marker_version.as_deref().is_some_and(|version| {
         provider.version_range.is_none_or(|range| resolve::version_satisfies(version, range))
     });
+    let tool_package = match provider.target {
+        crate::providers::ProviderTarget::PackageBin { package_name, .. } => package_name,
+        crate::providers::ProviderTarget::BuiltinVite => provider.marker,
+    };
+    let tool_version = if tool_package == provider.marker {
+        marker_version
+    } else {
+        find_installed_package(tool_package, root)
+            .as_ref()
+            .and_then(|package| package.version())
+            .map(str::to_string)
+    };
     let source = match source {
         SelectionSource::Config => DocSelectionSource { kind: "config", marker: None },
         // `info` takes no `--provider`; a flag source cannot occur here.
@@ -80,8 +97,8 @@ fn build_report(
         source: Some(source),
         target: Some(provider.target.as_str()),
         tool: Some(DocToolInfo {
-            package: provider.marker,
-            version,
+            package: tool_package,
+            version: tool_version,
             supported_range: provider.version_range,
             version_supported,
         }),
@@ -122,4 +139,44 @@ fn detected_candidates(root: &Path) -> Vec<&'static str> {
         .iter()
         .map(|provider| provider.id)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn split_provider_reports_the_executable_as_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#,
+        )
+        .unwrap();
+        let marker_root = dir.path().join("node_modules/@astrojs/starlight");
+        fs::create_dir_all(&marker_root).unwrap();
+        fs::write(
+            marker_root.join("package.json"),
+            r#"{ "name": "@astrojs/starlight", "version": "0.41.7" }"#,
+        )
+        .unwrap();
+        let astro_root = dir.path().join("node_modules/astro");
+        fs::create_dir_all(&astro_root).unwrap();
+        fs::write(
+            astro_root.join("package.json"),
+            r#"{ "name": "astro", "version": "7.2.2", "bin": { "astro": "astro.js" } }"#,
+        )
+        .unwrap();
+        let report = info_report(dir.path(), None).unwrap();
+        assert_eq!(report.provider, Some("starlight"));
+        let tool = report.tool.expect("tool info");
+        assert_eq!(tool.package, "astro");
+        assert_eq!(tool.version.as_deref(), Some("7.2.2"));
+        // The version gate stays on the marker package.
+        assert!(tool.version_supported);
+        let source = report.source.expect("source");
+        assert_eq!(source.marker, Some("@astrojs/starlight"));
+    }
 }

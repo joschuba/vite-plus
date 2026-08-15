@@ -308,6 +308,74 @@ mod tests {
     }
 
     #[test]
+    fn vitepress_floor_excludes_pre_vite8_alphas() {
+        let range = ">=2.0.0-alpha.18 <3.0.0";
+        assert!(!version_satisfies("2.0.0-alpha.17", range));
+        assert!(version_satisfies("2.0.0-alpha.18", range));
+        assert!(version_satisfies("2.0.0-alpha.19", range));
+        assert!(version_satisfies("2.0.0", range));
+        assert!(!version_satisfies("1.6.4", range));
+    }
+
+    #[test]
+    fn every_provider_requirement_admits_the_bundled_vite_line() {
+        for provider in DOC_PROVIDERS {
+            assert!(
+                version_satisfies("8.2.1", provider.vite_requirement),
+                "{} declares `{}`",
+                provider.id,
+                provider.vite_requirement
+            );
+        }
+    }
+
+    #[test]
+    fn starlight_resolves_the_astro_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#);
+        let marker_root = dir.path().join("node_modules/@astrojs/starlight");
+        fs::create_dir_all(&marker_root).unwrap();
+        fs::write(
+            marker_root.join("package.json"),
+            r#"{ "name": "@astrojs/starlight", "version": "0.41.7" }"#,
+        )
+        .unwrap();
+        let astro_root = dir.path().join("node_modules/astro");
+        fs::create_dir_all(&astro_root).unwrap();
+        fs::write(
+            astro_root.join("package.json"),
+            r#"{ "name": "astro", "version": "7.2.2", "bin": { "astro": "astro.js" } }"#,
+        )
+        .unwrap();
+        let resolution = resolve(&build_request(None), dir.path(), None).unwrap();
+        let DocResolution::PackageBin { bin_path, .. } = resolution else {
+            panic!("expected a package-bin execution");
+        };
+        assert!(bin_path.ends_with("node_modules/astro/astro.js"));
+    }
+
+    #[test]
+    fn starlight_missing_executable_package() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#);
+        let marker_root = dir.path().join("node_modules/@astrojs/starlight");
+        fs::create_dir_all(&marker_root).unwrap();
+        fs::write(
+            marker_root.join("package.json"),
+            r#"{ "name": "@astrojs/starlight", "version": "0.41.7" }"#,
+        )
+        .unwrap();
+        let error = resolve(&build_request(None), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert_eq!(
+            message,
+            "provider `starlight` executes `astro`, but that package is not installed"
+        );
+    }
+
+    #[test]
     fn detection_stays_at_the_invocation_directory() {
         // The workspace-root redirect happens before this crate runs (the
         // `defaultPackage` `doc` entry, an implicit `-C`), so resolution
