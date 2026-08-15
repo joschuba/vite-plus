@@ -409,7 +409,7 @@ pub async fn main(
                             vp_doc_cli::DocInvocation::Info { json } => {
                                 return execute_doc_info(json, &cwd, options.as_ref()).await;
                             }
-                            vp_doc_cli::DocInvocation::Lifecycle(request) => {
+                            vp_doc_cli::DocInvocation::Action(request) => {
                                 // The workspace documentation-package picker
                                 // and its non-interactive candidate listing
                                 // (rfcs/doc-command.md, Monorepos).
@@ -426,11 +426,10 @@ pub async fn main(
                                     };
                                 // Interactive no-provider flow: offer
                                 // initialization, then continue with the
-                                // requested lifecycle command
+                                // requested action
                                 // (rfcs/doc-command.md, No provider).
                                 if let Some(exit) =
-                                    offer_doc_init_for_lifecycle(&request, &cwd, options.as_ref())
-                                        .await?
+                                    offer_doc_init_for_action(&cwd, options.as_ref()).await?
                                 {
                                     return Ok(exit);
                                 }
@@ -509,17 +508,16 @@ fn run_doc_provider_picker() -> Result<Option<&'static vp_doc_cli::ProviderDefin
     })
 }
 
-/// The interactive no-provider flow for a lifecycle command: offer to
+/// The interactive no-provider flow for an action: offer to
 /// initialize a provider, then continue with the requested command. Returns
 /// an exit status when the command must stop: a declined prompt or a failed
 /// initialization. Non-interactive sessions return `None` immediately; the
 /// resolver then reports the standard error.
-async fn offer_doc_init_for_lifecycle(
-    request: &vp_doc_cli::DocRequest,
+async fn offer_doc_init_for_action(
     cwd: &AbsolutePathBuf,
     options: Option<&CliOptions>,
 ) -> Result<Option<ExitStatus>, Error> {
-    if request.provider.is_some() || !vp_shared::is_interactive_terminal() {
+    if !vp_shared::is_interactive_terminal() {
         return Ok(None);
     }
     // Config problems are reported by the resolver path, not here.
@@ -527,7 +525,7 @@ async fn offer_doc_init_for_lifecycle(
         return Ok(None);
     };
     if !matches!(
-        vp_doc_cli::select_provider(None, context.as_ref(), cwd.as_path()),
+        vp_doc_cli::select_provider(context.as_ref(), cwd.as_path()),
         Ok(vp_doc_cli::ProviderSelection::NoProvider)
     ) {
         return Ok(None);
@@ -601,7 +599,7 @@ async fn execute_doc_init(
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "Note: this project already declares {markers}. Select a provider with `--provider` after init."
+                    "Note: this project already declares {markers}. Set `doc.provider` to select between them."
                 );
             }
             for file in &files {
@@ -701,7 +699,7 @@ async fn execute_doc_info(
             );
         } else {
             println!(
-                "Multiple documentation providers are declared: {}. Pass `--provider` to lifecycle commands.",
+                "Multiple documentation providers are declared: {}. Remove the markers you do not use, or set `doc.provider` in vite.config.ts.",
                 candidates.join(", ")
             );
         }

@@ -59,7 +59,7 @@ pub struct ProviderDefinition {
     /// The Vite range the tool's supported releases run on. Declarative
     /// data; enforcement rides `version_range`.
     pub vite_requirement: &'static str,
-    /// Lifecycle commands this provider supports. `build` is always required.
+    /// The actions this provider supports. `build` is always required.
     pub capabilities: &'static [DocAction],
     pub target: ProviderTarget,
     /// One-command setup support for `vp doc init`.

@@ -85,8 +85,7 @@ fn build_report(
     };
     let source = match source {
         SelectionSource::Config => DocSelectionSource { kind: "config", marker: None },
-        // `info` takes no `--provider`; a flag source cannot occur here.
-        SelectionSource::Flag | SelectionSource::Marker => {
+        SelectionSource::Marker => {
             DocSelectionSource { kind: "dependency-marker", marker: Some(provider.marker) }
         }
     };
@@ -109,9 +108,9 @@ fn build_report(
 
 /// Build the info report from the effective root. Reads only manifests and
 /// the statically extracted config. An invalid `doc.provider` value is a
-/// user error, the same as in the lifecycle commands.
+/// user error, the same as in the actions.
 pub fn info_report(cwd: &Path, context: Option<&DocConfigContext>) -> Result<DocInfoReport, Error> {
-    match resolve::select_provider(None, context, cwd) {
+    match resolve::select_provider(context, cwd) {
         Ok(resolve::ProviderSelection::Selected { provider, source }) => {
             Ok(build_report(provider, source, cwd))
         }

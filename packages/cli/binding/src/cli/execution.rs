@@ -64,7 +64,7 @@ pub(super) async fn resolve_and_execute(
         // is batch. A parse error is reported by the resolver below.
         SynthesizableSubcommand::Doc { args } => matches!(
             vp_doc_cli::parse_doc_args(args),
-            Ok(vp_doc_cli::DocInvocation::Lifecycle(request))
+            Ok(vp_doc_cli::DocInvocation::Action(request))
                 if request.action != vp_doc_cli::DocAction::Build
         ),
         _ => false,

@@ -1079,10 +1079,7 @@ const commandHelpDocs = {
       },
       {
         title: 'Options',
-        rows: [
-          { label: '--provider <PROVIDER>', description: 'Select the provider for this invocation' },
-          { label: '-h, --help', description: 'Print help' },
-        ],
+        rows: [{ label: '-h, --help', description: 'Print help' }],
       },
       {
         title: 'Examples',
@@ -1090,7 +1087,6 @@ const commandHelpDocs = {
           '  vp doc',
           '  vp doc dev --host 0.0.0.0',
           '  vp doc build',
-          '  vp doc --provider vitepress build',
           '  vp doc init vitepress',
           '  vp doc info --json',
           '  vp -C packages/docs doc build',

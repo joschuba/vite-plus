@@ -277,7 +277,7 @@ impl SubcommandResolver {
             SynthesizableSubcommand::Doc { args } => {
                 let request =
                     match vp_doc_cli::parse_doc_args(&args).map_err(|e| anyhow::anyhow!("{e}"))? {
-                        vp_doc_cli::DocInvocation::Lifecycle(request) => request,
+                        vp_doc_cli::DocInvocation::Action(request) => request,
                         // The direct path handles `init`/`info` before resolution;
                         // reaching these arms means a task script.
                         vp_doc_cli::DocInvocation::Init { .. } => {
