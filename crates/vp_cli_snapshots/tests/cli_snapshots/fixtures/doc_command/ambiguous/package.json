@@ -1,0 +1,5 @@
+{
+  "name": "ambiguous",
+  "private": true,
+  "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" }
+}

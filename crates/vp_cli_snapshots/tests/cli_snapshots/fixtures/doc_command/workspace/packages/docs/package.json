@@ -1,0 +1,5 @@
+{
+  "name": "docs",
+  "private": true,
+  "devDependencies": { "@astrojs/starlight": "^0.41.0" }
+}

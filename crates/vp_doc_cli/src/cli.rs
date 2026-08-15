@@ -35,44 +35,37 @@ pub enum DocInvocation {
     Info { json: bool },
 }
 
-/// Parse `vp doc` arguments per the doc-command RFC. Vite+ consumes no
-/// option of its own; every argument after `dev`, `build`, or `preview`
-/// (or after `--`) forwards to the tool verbatim.
+/// Parse `vp doc` arguments per the doc-command RFC. The first token
+/// decides the invocation, and Vite+ consumes no option of its own: every
+/// argument after `dev`, `build`, or `preview` (or after `--`) forwards to
+/// the tool verbatim.
 pub fn parse_doc_args(args: &[String]) -> Result<DocInvocation, Error> {
-    let mut action = DocAction::Dev;
-    let mut rest: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if arg == "--" {
-            rest.extend(args[i + 1..].iter().cloned());
-            break;
-        } else if arg.starts_with('-') {
-            return Err(user_message(format!(
-                "unexpected option `{arg}` before the doc command\n\nPlace tool options after `dev`, `build`, or `preview`, or after `--`."
-            )));
-        } else {
-            match arg {
-                "dev" => action = DocAction::Dev,
-                "build" => action = DocAction::Build,
-                "preview" => action = DocAction::Preview,
-                "init" => {
-                    return Ok(DocInvocation::Init { args: args[i + 1..].to_vec() });
-                }
-                "info" => {
-                    return parse_info_args(&args[i + 1..]);
-                }
-                other => {
-                    return Err(user_message(format!(
-                        "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init, info"
-                    )));
-                }
-            }
-            rest.extend(args[i + 1..].iter().cloned());
-            break;
-        }
-        i += 1;
+    let Some(first) = args.first().map(String::as_str) else {
+        return Ok(DocInvocation::Action(DocRequest { action: DocAction::Dev, args: Vec::new() }));
+    };
+    let rest = args[1..].to_vec();
+    if first == "--" {
+        // `--` before an action ends Vite+ parsing; everything after it
+        // forwards to the default `dev`.
+        return Ok(DocInvocation::Action(DocRequest { action: DocAction::Dev, args: rest }));
     }
+    if first.starts_with('-') {
+        return Err(user_message(format!(
+            "unexpected option `{first}` before the doc command\n\nPlace tool options after `dev`, `build`, or `preview`, or after `--`."
+        )));
+    }
+    let action = match first {
+        "dev" => DocAction::Dev,
+        "build" => DocAction::Build,
+        "preview" => DocAction::Preview,
+        "init" => return Ok(DocInvocation::Init { args: rest }),
+        "info" => return parse_info_args(&rest),
+        other => {
+            return Err(user_message(format!(
+                "unrecognized doc command `{other}`\n\nAvailable commands: dev, build, preview, init, info"
+            )));
+        }
+    };
     Ok(DocInvocation::Action(DocRequest { action, args: rest }))
 }
 
@@ -88,4 +81,84 @@ fn parse_info_args(args: &[String]) -> Result<DocInvocation, Error> {
         }
     }
     Ok(DocInvocation::Info { json })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    fn action(list: &[&str]) -> DocRequest {
+        match parse_doc_args(&args(list)).unwrap() {
+            DocInvocation::Action(request) => request,
+            other => panic!("expected an action, got {other:?}"),
+        }
+    }
+
+    fn parse_error(list: &[&str]) -> String {
+        match parse_doc_args(&args(list)).unwrap_err() {
+            Error::UserMessage(message) => message,
+            other => panic!("expected a user message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_doc_defaults_to_dev() {
+        let request = action(&[]);
+        assert_eq!(request.action, DocAction::Dev);
+        assert!(request.args.is_empty());
+    }
+
+    #[test]
+    fn arguments_after_the_action_forward_verbatim() {
+        let request = action(&["build", "--site", "example", "--", "-x"]);
+        assert_eq!(request.action, DocAction::Build);
+        assert_eq!(request.args, ["--site", "example", "--", "-x"]);
+    }
+
+    #[test]
+    fn double_dash_forwards_to_the_default_dev() {
+        let request = action(&["--", "--port", "4173"]);
+        assert_eq!(request.action, DocAction::Dev);
+        assert_eq!(request.args, ["--port", "4173"]);
+    }
+
+    #[test]
+    fn an_option_before_the_action_is_an_error() {
+        let message = parse_error(&["--host", "dev"]);
+        assert!(message.contains("unexpected option `--host`"), "{message}");
+    }
+
+    #[test]
+    fn an_unknown_command_token_is_an_error() {
+        let message = parse_error(&["serve"]);
+        assert!(message.contains("unrecognized doc command `serve`"), "{message}");
+    }
+
+    #[test]
+    fn init_takes_the_remaining_arguments() {
+        let DocInvocation::Init { args: rest } =
+            parse_doc_args(&args(&["init", "vitepress"])).unwrap()
+        else {
+            panic!("expected init");
+        };
+        assert_eq!(rest, ["vitepress"]);
+    }
+
+    #[test]
+    fn info_accepts_only_json() {
+        assert!(matches!(
+            parse_doc_args(&args(&["info"])).unwrap(),
+            DocInvocation::Info { json: false }
+        ));
+        assert!(matches!(
+            parse_doc_args(&args(&["info", "--json"])).unwrap(),
+            DocInvocation::Info { json: true }
+        ));
+        let message = parse_error(&["info", "--verbose"]);
+        assert!(message.contains("unexpected argument `--verbose`"), "{message}");
+    }
 }

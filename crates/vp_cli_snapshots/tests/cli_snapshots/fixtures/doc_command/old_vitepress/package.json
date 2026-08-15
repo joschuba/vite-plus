@@ -1,0 +1,5 @@
+{
+  "name": "old-vitepress",
+  "private": true,
+  "devDependencies": { "vitepress": "^1.0.0" }
+}

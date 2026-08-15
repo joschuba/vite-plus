@@ -301,6 +301,20 @@ impl SubcommandResolver {
                     _ => UserCacheConfig::disabled(),
                 };
                 let context = load_doc_context(cwd.as_path(), self.cli_options.as_ref()).await?;
+                // When dependency detection makes the selection, name the
+                // marker before delegation; selections from `doc.provider`
+                // stay silent (rfcs/doc-command.md, Selection reporting).
+                // Stderr keeps the tool's stdout untouched.
+                if let Ok(vp_doc_cli::ProviderSelection::Selected {
+                    provider,
+                    source: vp_doc_cli::SelectionSource::Marker,
+                }) = vp_doc_cli::select_provider(context.as_ref(), cwd.as_path())
+                {
+                    eprintln!(
+                        "Using provider `{}` (dependency marker `{}` in package.json)",
+                        provider.id, provider.marker
+                    );
+                }
                 let resolution = vp_doc_cli::resolve(&request, cwd.as_path(), context.as_ref())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
 

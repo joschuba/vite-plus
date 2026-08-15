@@ -1,0 +1,5 @@
+{
+  "name": "detected",
+  "private": true,
+  "devDependencies": { "vitepress": "^2.0.0-0" }
+}

@@ -1,0 +1,96 @@
+# PTY coverage for the multi-provider `vp doc` command
+# (rfcs/doc-command.md, CLI snapshot tests). The fixture vendors small fake
+# packages with the real package and bin names; no case downloads a real
+# documentation framework.
+
+[[case]]
+name = "command_doc_help"
+vp = ["local", "global"]
+comment = "`vp doc --help` renders Vite+ help without loading a tool."
+steps = [["vp", "doc", "--help"]]
+
+[[case]]
+name = "doc_detected_provider"
+vp = "local"
+cwd = "detected"
+comment = "A unique dependency marker selects the provider; the delegation line names the marker."
+steps = [["vp", "doc", "build"]]
+
+[[case]]
+name = "doc_no_provider"
+vp = "local"
+cwd = "no_provider"
+comment = "A non-interactive session exits 1 and prints the one-command fix."
+steps = [
+  { argv = ["vp", "doc", "build"], tty = false, continue-on-failure = true },
+]
+
+[[case]]
+name = "doc_init_prompt_cancel"
+vp = "local"
+cwd = "no_provider"
+comment = "An interactive session offers initialization instead of failing; a declined prompt exits non-zero."
+steps = [
+  { argv = ["vp", "doc"], continue-on-failure = true, interactions = [
+    { "expect-milestone" = "doc-provider-select::0" },
+    { "write-key" = "down" },
+    { "expect-milestone" = "doc-provider-select::1" },
+    { "write-key" = "ctrl-c" },
+  ] },
+]
+
+[[case]]
+name = "doc_multiple_providers"
+vp = "local"
+cwd = "ambiguous"
+comment = "More than one marker in a manifest is a misconfiguration."
+steps = [
+  { argv = ["vp", "doc", "build"], continue-on-failure = true },
+]
+
+[[case]]
+name = "doc_unsupported_tool_version"
+vp = "local"
+cwd = "old_vitepress"
+comment = "The version gate rejects VitePress 1 before process creation; the hint derives from the declared range."
+steps = [
+  { argv = ["vp", "doc", "build"], continue-on-failure = true },
+]
+
+[[case]]
+name = "doc_info_report"
+vp = "local"
+cwd = "starlight"
+comment = "`vp doc info` reports the executable as the tool; the version gate stays on the marker."
+steps = [
+  ["vp", "doc", "info"],
+  ["vp", "doc", "info", "--json"],
+]
+
+[[case]]
+name = "doc_workspace_listing"
+vp = "local"
+cwd = "workspace"
+comment = "Non-interactive at a workspace root: each candidate prints as a ready-to-run command."
+steps = [
+  { argv = ["vp", "doc", "build"], tty = false, continue-on-failure = true },
+]
+
+[[case]]
+name = "doc_workspace_picker"
+vp = "local"
+cwd = "workspace"
+comment = "Interactive at a workspace root: the picker lists only marker-declaring packages, then the selection runs."
+steps = [
+  { argv = ["vp", "doc"], interactions = [
+    { "expect-milestone" = "doc-package-select::0" },
+    { "write-key" = "enter" },
+  ] },
+]
+
+[[case]]
+name = "doc_default_package_redirect"
+vp = "local"
+cwd = "redirect"
+comment = "The `defaultPackage` `doc` entry behaves as an implicit `-C` into the documentation package."
+steps = [["vp", "doc", "build"]]

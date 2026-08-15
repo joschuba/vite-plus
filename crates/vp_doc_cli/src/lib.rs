@@ -5,6 +5,11 @@
 //! package-manager dispatch for `init`, and user-facing printing stay with
 //! the caller.
 
+// The same crate-level allowance as `vp_pm_cli`: errors are complete
+// user-facing `String` messages, and paths interoperate with `serde_json`
+// manifests.
+#![allow(clippy::allow_attributes, clippy::disallowed_types, clippy::disallowed_macros)]
+
 mod cli;
 mod config;
 mod detect;
@@ -24,7 +29,9 @@ pub use detect::{
 };
 pub use error::Error;
 pub use info::{DocInfoReport, DocSelectionSource, DocToolInfo, info_report};
-pub use init::{DocInitOutcome, ScaffoldedFile, init_scaffold};
+pub use init::{
+    DocConfigWrite, DocInitOutcome, ScaffoldedFile, init_scaffold, write_doc_provider_config,
+};
 pub use providers::{
     DOC_PROVIDERS, ProviderDefinition, ProviderInit, ProviderTarget, StarterFile, init_providers,
 };

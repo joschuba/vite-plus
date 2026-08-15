@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    cli::DocRequest,
+    cli::{DocAction, DocRequest},
     config::DocConfigContext,
     detect::{detect_providers, find_installed_package, find_nearest_manifest},
     error::{Error, user_message},
@@ -112,6 +112,23 @@ pub fn select_provider(
     }
 }
 
+/// The capability gate: an unsupported action fails before process
+/// creation. Every built-in provider declares all three actions; the field
+/// exists so a provider without a native `dev` or `preview` can join
+/// without a contract change (rfcs/doc-command.md, Built-in Providers).
+fn ensure_capability(provider: &ProviderDefinition, action: DocAction) -> Result<(), Error> {
+    if provider.capabilities.contains(&action) {
+        return Ok(());
+    }
+    let supported =
+        provider.capabilities.iter().map(|action| action.as_str()).collect::<Vec<_>>().join(", ");
+    Err(user_message(format!(
+        "the `{}` provider does not support `vp doc {}`\n\nSupported commands: {supported}",
+        provider.id,
+        action.as_str()
+    )))
+}
+
 pub(crate) fn version_satisfies(version: &str, range: &str) -> bool {
     let Ok(version) = version.parse::<node_semver::Version>() else {
         return false;
@@ -134,19 +151,7 @@ pub fn resolve(
         ProviderSelection::NoProvider => return Err(user_message(no_provider_message())),
     };
 
-    if !provider.capabilities.contains(&request.action) {
-        let supported = provider
-            .capabilities
-            .iter()
-            .map(|action| action.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(user_message(format!(
-            "the `{}` provider does not support `vp doc {}`\n\nSupported commands: {supported}",
-            provider.id,
-            request.action.as_str()
-        )));
-    }
+    ensure_capability(provider, request.action)?;
 
     let Some(marker) = find_installed_package(provider.marker, cwd) else {
         return Err(user_message(format!(
@@ -216,14 +221,21 @@ mod tests {
         fs::write(dir.join("package.json"), contents).unwrap();
     }
 
-    fn install_vuepress(dir: &Path) {
-        let package_root = dir.join("node_modules/vuepress");
+    fn install_package(dir: &Path, name: &str, manifest: &str) {
+        let mut package_root = dir.join("node_modules");
+        for segment in name.split('/') {
+            package_root.push(segment);
+        }
         fs::create_dir_all(&package_root).unwrap();
-        fs::write(
-            package_root.join("package.json"),
-            r#"{ "name": "vuepress", "version": "2.0.0", "bin": { "vuepress": "bin/vuepress.js" } }"#,
-        )
-        .unwrap();
+        fs::write(package_root.join("package.json"), manifest).unwrap();
+    }
+
+    fn install_vocs(dir: &Path) {
+        install_package(
+            dir,
+            "vocs",
+            r#"{ "name": "vocs", "version": "2.0.5", "bin": { "vocs": "bin.js" } }"#,
+        );
     }
 
     fn context(dir: &Path, provider: Option<&str>) -> DocConfigContext {
@@ -242,15 +254,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(
             dir.path(),
-            r#"{ "devDependencies": { "vitepress": "^2.0.0", "vuepress": "^2.0.0" } }"#,
+            r#"{ "devDependencies": { "vitepress": "^2.0.0", "vocs": "^2.0.0" } }"#,
         );
-        install_vuepress(dir.path());
-        let context = context(dir.path(), Some("vuepress"));
+        install_vocs(dir.path());
+        let context = context(dir.path(), Some("vocs"));
         let resolution = resolve(&build_request(), dir.path(), Some(&context)).unwrap();
         let DocResolution::PackageBin { bin_path, args } = resolution else {
             panic!("expected a package-bin execution");
         };
-        assert!(bin_path.ends_with("node_modules/vuepress/bin/vuepress.js"));
+        assert!(bin_path.ends_with("node_modules/vocs/bin.js"));
         assert_eq!(args, ["build"]);
     }
 
@@ -270,7 +282,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(
             dir.path(),
-            r#"{ "devDependencies": { "vitepress": "^2.0.0", "vuepress": "^2.0.0" } }"#,
+            r#"{ "devDependencies": { "vitepress": "^2.0.0", "vocs": "^2.0.0" } }"#,
         );
         let error = resolve(&build_request(), dir.path(), None).unwrap_err();
         let Error::UserMessage(message) = error else {
@@ -296,15 +308,102 @@ mod tests {
     fn config_provider_not_installed() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), "{}");
-        let context = context(dir.path(), Some("vuepress"));
+        let context = context(dir.path(), Some("vocs"));
         let error = resolve(&build_request(), dir.path(), Some(&context)).unwrap_err();
         let Error::UserMessage(message) = error else {
             panic!("expected a user message");
         };
+        // The RFC's Explicit provider validation example, verbatim.
+        assert_eq!(message, "`doc.provider` selects `vocs`, but package `vocs` is not installed");
+    }
+
+    #[test]
+    fn unsupported_action_fails_before_process_creation() {
+        static LIMITED: ProviderDefinition = ProviderDefinition {
+            id: "limited",
+            display_name: "Limited",
+            marker: "limited",
+            marker_hint: None,
+            version_range: None,
+            vite_requirement: ">=8.0.0",
+            capabilities: &[DocAction::Dev, DocAction::Build],
+            target: ProviderTarget::PackageBin { package_name: "limited", bin_name: "limited" },
+            init: None,
+        };
+        assert!(ensure_capability(&LIMITED, DocAction::Build).is_ok());
+        let Error::UserMessage(message) = ensure_capability(&LIMITED, DocAction::Preview)
+            .expect_err("preview is not a capability")
+        else {
+            panic!("expected a user message");
+        };
         assert_eq!(
             message,
-            "`doc.provider` selects `vuepress`, but package `vuepress` is not installed"
+            "the `limited` provider does not support `vp doc preview`\n\nSupported commands: dev, build"
         );
+    }
+
+    #[test]
+    fn every_builtin_provider_declares_all_actions() {
+        for provider in DOC_PROVIDERS {
+            for action in [DocAction::Dev, DocAction::Build, DocAction::Preview] {
+                assert!(
+                    provider.capabilities.contains(&action),
+                    "{} lacks {action:?}",
+                    provider.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vitepress_1_is_rejected_before_process_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vitepress": "^1.0.0" } }"#);
+        install_package(
+            dir.path(),
+            "vitepress",
+            r#"{ "name": "vitepress", "version": "1.6.4", "bin": { "vitepress": "bin/vitepress.js" } }"#,
+        );
+        let error = resolve(&build_request(), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        // The RFC's Unsupported tool version example, verbatim.
+        assert_eq!(
+            message,
+            "`vp doc` supports VitePress, but found vitepress@1.6.4\n\nInstall a VitePress release (`>=2.0.0-alpha.18 <3.0.0`)."
+        );
+    }
+
+    #[test]
+    fn ox_content_resolves_the_builtin_vite_target() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"{ "devDependencies": { "@ox-content/vite-plugin": "^1.1.0" } }"#,
+        );
+        install_package(
+            dir.path(),
+            "@ox-content/vite-plugin",
+            r#"{ "name": "@ox-content/vite-plugin", "version": "1.1.0" }"#,
+        );
+        let request = DocRequest { action: DocAction::Dev, args: vec!["--open".to_string()] };
+        let resolution = resolve(&request, dir.path(), None).unwrap();
+        let DocResolution::BuiltinVite { args } = resolution else {
+            panic!("expected the built-in Vite target");
+        };
+        assert_eq!(args, ["dev", "--open"]);
+    }
+
+    #[test]
+    fn no_provider_message_renders_from_the_definitions() {
+        let message = no_provider_message();
+        assert!(message.contains("Run `vp doc init vitepress` to set up VitePress (recommended)"));
+        assert!(message.contains("`vp doc init starlight`, `vp doc init ox-content`"));
+        assert!(message.contains("  vitepress (major version 2)\n  vocs\n"));
+        assert!(message.contains("  @astrojs/starlight"));
+        assert!(message.contains("  @ox-content/vite-plugin"));
+        assert!(message.contains("`defaultPackage.doc`"));
     }
 
     #[test]
@@ -383,8 +482,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), "{}");
         let docs = dir.path().join("packages/docs");
-        write_manifest(&docs, r#"{ "devDependencies": { "vuepress": "^2.0.0" } }"#);
-        install_vuepress(&docs);
+        write_manifest(&docs, r#"{ "devDependencies": { "vocs": "^2.0.0" } }"#);
+        install_vocs(&docs);
         let error = resolve(&build_request(), dir.path(), None).unwrap_err();
         let Error::UserMessage(message) = error else {
             panic!("expected a user message");

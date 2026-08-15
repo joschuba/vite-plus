@@ -586,22 +586,7 @@ async fn execute_doc_init(
             );
             Ok(ExitStatus::SUCCESS)
         }
-        vp_doc_cli::DocInitOutcome::Scaffolded {
-            provider,
-            other_declared,
-            files,
-            dependencies,
-        } => {
-            if !other_declared.is_empty() {
-                let markers = other_declared
-                    .iter()
-                    .map(|marker| format!("`{marker}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!(
-                    "Note: this project already declares {markers}. Set `doc.provider` to select between them."
-                );
-            }
+        vp_doc_cli::DocInitOutcome::Scaffolded { provider, files, dependencies } => {
             for file in &files {
                 if file.created {
                     println!("Created {}.", file.path);
@@ -625,6 +610,30 @@ async fn execute_doc_init(
             if status.0 != 0 {
                 eprintln!("error: failed to install {}", dependencies.join(", "));
                 return Ok(status);
+            }
+
+            // Step 3: write `doc` configuration only when detection alone
+            // would not select the provider afterward
+            // (rfcs/doc-command.md, Initialization).
+            match vp_doc_cli::write_doc_provider_config(provider, cwd.as_path()) {
+                Ok(vp_doc_cli::DocConfigWrite::NotNeeded) => {}
+                Ok(vp_doc_cli::DocConfigWrite::Created) => {
+                    println!("Created vite.config.ts with `doc.provider: '{}'`.", provider.id);
+                }
+                Ok(vp_doc_cli::DocConfigWrite::Updated { file }) => {
+                    println!("Set `doc.provider: '{}'` in {file}.", provider.id);
+                }
+                Ok(vp_doc_cli::DocConfigWrite::Manual { file }) => {
+                    println!(
+                        "Another provider is declared. Set `doc.provider: '{}'` in {file} to select {}.",
+                        provider.id, provider.display_name
+                    );
+                }
+                Err(vp_doc_cli::Error::UserMessage(message)) => {
+                    eprintln!("error: {message}");
+                    return Ok(ExitStatus(1));
+                }
+                Err(error) => return Err(Error::Anyhow(anyhow::Error::new(error))),
             }
 
             println!("{} is ready. Run `vp doc` to start the dev server.", provider.display_name);

@@ -1,10 +1,9 @@
 //! Data-only definitions of the built-in documentation providers.
 //!
-//! PoC scope (rfcs/doc-command.md): the RFC's built-in providers
-//! (VitePress 2, Vocs, Starlight, Ox Content) with their pinned Vite 8
-//! floors, plus a VuePress entry that exercises the capability gate.
-//! Detection and resolution stay generic; new providers join by adding
-//! definitions here.
+//! The RFC's built-in providers (rfcs/doc-command.md): VitePress 2, Vocs,
+//! Starlight, and Ox Content, with their pinned Vite 8 floors. Detection
+//! and resolution stay generic; new providers join by adding definitions
+//! here.
 
 use crate::cli::DocAction;
 
@@ -95,7 +94,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         id: "vocs",
         display_name: "Vocs",
         marker: "vocs",
-        marker_hint: Some("major version 2"),
+        marker_hint: None,
         version_range: Some(">=2.0.0"),
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
@@ -106,8 +105,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         // The marker and the executable differ: Starlight is detected
         // through `@astrojs/starlight` and executed through `astro`.
         // `0.41.0` is the first release whose Astro peer admits only
-        // Astro 7, the first Astro major on Vite 8. Init support is a PoC
-        // follow-up; the RFC ships it in version 1.
+        // Astro 7, the first Astro major on Vite 8.
         id: "starlight",
         display_name: "Starlight",
         marker: "@astrojs/starlight",
@@ -116,7 +114,24 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::PackageBin { package_name: "astro", bin_name: "astro" },
-        init: None,
+        init: Some(ProviderInit {
+            dependencies: &["astro", "@astrojs/starlight"],
+            starter_files: &[
+                StarterFile {
+                    path: "astro.config.mjs",
+                    content: "import { defineConfig } from 'astro/config';\nimport starlight from '@astrojs/starlight';\n\nexport default defineConfig({\n  integrations: [starlight({ title: 'Docs' })],\n});\n",
+                },
+                StarterFile {
+                    path: "src/content.config.ts",
+                    content: "import { defineCollection } from 'astro:content';\nimport { docsLoader } from '@astrojs/starlight/loaders';\nimport { docsSchema } from '@astrojs/starlight/schema';\n\nexport const collections = {\n  docs: defineCollection({ loader: docsLoader(), schema: docsSchema() }),\n};\n",
+                },
+                StarterFile {
+                    path: "src/content/docs/index.md",
+                    content: "---\ntitle: Hello Starlight\n---\n\nStart the dev server with `vp doc`.\n",
+                },
+            ],
+            prompt_hint: "Astro",
+        }),
     },
     ProviderDefinition {
         // Every published release targets Vite 8, and from 1.1.0 the
@@ -146,24 +161,8 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
                     content: "<!doctype html>\n<html>\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>Docs</title>\n  </head>\n  <body>\n    <div id=\"app\"></div>\n  </body>\n</html>\n",
                 },
             ],
-            prompt_hint: "Vite plugin",
+            prompt_hint: "framework-agnostic",
         }),
-    },
-    ProviderDefinition {
-        // VuePress has no native preview command. The RFC defers this
-        // provider; the PoC includes it to exercise the capability gate with
-        // the RFC's own example. No init metadata, so it stays out of the
-        // init prompt and hint list.
-        id: "vuepress",
-        display_name: "VuePress",
-        marker: "vuepress",
-        marker_hint: Some("major version 2"),
-        // `2.0.0-rc.27` is the first RC whose Vite bundler declares Vite 8.
-        version_range: Some(">=2.0.0-rc.27 <3.0.0"),
-        vite_requirement: ">=8.0.0",
-        capabilities: &[DocAction::Dev, DocAction::Build],
-        target: ProviderTarget::PackageBin { package_name: "vuepress", bin_name: "vuepress" },
-        init: None,
     },
 ];
 

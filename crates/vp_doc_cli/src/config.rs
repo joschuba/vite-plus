@@ -101,13 +101,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("vite.config.ts"),
-            "export default { doc: { provider: 'vuepress' } };\n",
+            "export default { doc: { provider: 'vocs' } };\n",
         )
         .unwrap();
         let StaticDocConfig::Resolved(context) = load_static_doc_config(dir.path()).unwrap() else {
             panic!("expected a resolved static config");
         };
-        assert_eq!(context.config.provider.as_deref(), Some("vuepress"));
+        assert_eq!(context.config.provider.as_deref(), Some("vocs"));
         assert_eq!(context.config_dir, dir.path());
     }
 
@@ -135,7 +135,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("vite.config.ts"),
-            "export default { doc: { provider: 'vuepress' } };\n",
+            "export default { doc: { provider: 'vocs' } };\n",
         )
         .unwrap();
         let nested = dir.path().join("packages/app");
