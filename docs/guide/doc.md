@@ -30,9 +30,9 @@ vp doc init vitepress   # set up a provider
 vp doc info --json      # report the resolved provider
 ```
 
-Every argument after `dev`, `build`, or `preview` forwards to the tool verbatim. The classic VitePress layout with content in `docs/` is `vp doc dev docs`, exactly like `vitepress dev docs`.
+Every argument after `dev`, `build`, or `preview` forwards to the tool verbatim. For the classic VitePress layout with content in `docs/`, run `vp doc dev docs`, exactly like `vitepress dev docs`.
 
-Tool-only subcommands such as `vocs twoslash` run through `vp exec` or a package script:
+Run tool-only subcommands such as `vocs twoslash` through `vp exec` or a package script:
 
 ```bash
 vp exec vocs twoslash
@@ -45,7 +45,7 @@ Vite+ selects the provider in this order:
 1. `doc.provider` in `vite.config.ts`
 2. A unique dependency marker in the nearest `package.json`
 
-Detection reads `dependencies` and `devDependencies`. Most projects need no configuration: declare the tool as a dependency and `vp doc` finds it.
+Detection reads `dependencies` and `devDependencies`. Most projects need no configuration: declare the tool as a dependency. `vp doc` finds it.
 
 ```json [package.json]
 {
@@ -55,7 +55,7 @@ Detection reads `dependencies` and `devDependencies`. Most projects need no conf
 }
 ```
 
-A package selects exactly one provider. When more than one marker is declared, `vp doc` reports a misconfiguration and exits. The one legitimate window is a migration, where the old and the new marker coexist until the switch completes. Set `doc.provider` to bridge that window:
+A package selects exactly one provider. When a package declares more than one marker, `vp doc` reports a misconfiguration and exits. The one legitimate window is a migration, where the old and the new marker coexist until the switch completes. Set `doc.provider` to bridge that window:
 
 ```ts [vite.config.ts]
 import { defineConfig } from 'vite-plus';
@@ -69,7 +69,7 @@ export default defineConfig({
 
 ## Setting Up a Provider
 
-`vp doc init [PROVIDER]` sets up a provider in place: it scaffolds the tool's starter files (never overwriting existing ones), installs the dependencies through your package manager, and writes `doc.provider` when detection alone would not select the provider.
+`vp doc init [PROVIDER]` sets up a provider in place. It scaffolds the tool's starter files and never overwrites existing ones. It installs the dependencies through your package manager. When detection alone would not select the provider, it also writes `doc.provider`.
 
 In an interactive terminal, `vp doc` with no provider offers the same setup instead of failing, and continues into the requested command after the install. In CI the command exits with status 1 and prints the exact `vp doc init` invocation to run.
 
@@ -84,7 +84,7 @@ $ vp doc info --json
   "displayName": "Starlight",
   "source": { "kind": "dependency-marker", "marker": "@astrojs/starlight" },
   "target": "package-bin",
-  "tool": { "package": "astro", "version": "7.2.2", "versionSupported": true },
+  "tool": { "package": "astro", "version": "7.2.2", "supportedRange": ">=0.41.0", "versionSupported": true },
   "commands": ["dev", "build", "preview"]
 }
 ```
@@ -103,7 +103,7 @@ export default defineConfig({
 });
 ```
 
-Every `vp doc` subcommand at the root then behaves as an implicit `-C packages/docs`, `init` and `info` included. Without the entry, an interactive `vp doc` at the root opens a picker over the workspace packages that declare a provider, and a non-interactive run lists each candidate as a ready-to-run `vp -C <dir> doc` command.
+Every `vp doc` subcommand at the root then behaves as an implicit `-C packages/docs`, including `init` and `info`. Without the entry, an interactive `vp doc` at the root opens a picker over the workspace packages that declare a provider. A non-interactive run lists each candidate as a ready-to-run `vp -C <dir> doc` command.
 
 ## Caching
 
