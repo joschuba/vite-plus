@@ -180,14 +180,14 @@ fn install_ctrl_handler() {
 
 ### Size Optimization
 
-| Technique                                                              | Status |
-| ---------------------------------------------------------------------- | ------ |
-| Zero external dependencies (raw FFI, no `windows` crate)               | Done   |
-| No direct `core::fmt` usage (avoid `eprintln!`/`format!`/`.unwrap()`)  | Done   |
-| Own profile: `opt-level="z"`, `lto="fat"`, `codegen-units=1`, `strip`  | Done   |
-| build-std: recompile `std` with this profile (`-Zbuild-std`)           | Done   |
-| `panic = "immediate-abort"` (no panic formatting, unwinding, backtrace) | Done   |
-| `build-std-features = ["optimize_for_size"]` (drops panic-unwind, backtrace features) | Done |
+| Technique                                                                             | Status |
+| ------------------------------------------------------------------------------------- | ------ |
+| Zero external dependencies (raw FFI, no `windows` crate)                              | Done   |
+| No direct `core::fmt` usage (avoid `eprintln!`/`format!`/`.unwrap()`)                 | Done   |
+| Own profile: `opt-level="z"`, `lto="fat"`, `codegen-units=1`, `strip`                 | Done   |
+| build-std: recompile `std` with this profile (`-Zbuild-std`)                          | Done   |
+| `panic = "immediate-abort"` (no panic formatting, unwinding, backtrace)               | Done   |
+| `build-std-features = ["optimize_for_size"]` (drops panic-unwind, backtrace features) | Done   |
 
 **Binary size**: ~72KB on x86_64-pc-windows-msvc (~70KB on aarch64). With the
 precompiled `std` the same source built to ~208KB: the prebuilt rlib carries
@@ -320,14 +320,14 @@ Every variant below was built with cargo-xwin and measured on
 x86_64-pc-windows-msvc. The numbers serve as reference material for further
 size work.
 
-| Variant                                                                    | Toolchain | Size      |
-| -------------------------------------------------------------------------- | --------- | --------- |
+| Variant                                                                        | Toolchain | Size      |
+| ------------------------------------------------------------------------------ | --------- | --------- |
 | Current source, precompiled `std`, `opt-level="z"` + fat LTO + `panic="abort"` | stable    | 212,992 B |
-| Current source + build-std + `panic="immediate-abort"` (shipped today)     | nightly   | 73,728 B  |
-| Same + `#![no_main]` + `mainCRTStartup` + `atexit` stub                    | nightly   | 69,632 B  |
-| Raw Win32 rewrite, normal `main`, stable, no build-std                     | stable    | 105,984 B |
-| Raw Win32 rewrite, normal `main` + build-std                               | nightly   | 13,824 B  |
-| Raw Win32 rewrite + `#![no_main]` (uv-trampoline structure)                | nightly   | 6,656 B   |
+| Current source + build-std + `panic="immediate-abort"` (shipped today)         | nightly   | 73,728 B  |
+| Same + `#![no_main]` + `mainCRTStartup` + `atexit` stub                        | nightly   | 69,632 B  |
+| Raw Win32 rewrite, normal `main`, stable, no build-std                         | stable    | 105,984 B |
+| Raw Win32 rewrite, normal `main` + build-std                                   | nightly   | 13,824 B  |
+| Raw Win32 rewrite + `#![no_main]` (uv-trampoline structure)                    | nightly   | 6,656 B   |
 
 For comparison: uv-trampoline ships 45,056 B (x64 console), Scoop's default
 kiennq shim is 136,192 B (statically linked MSVC C), and Scoop once vendored
