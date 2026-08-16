@@ -17,7 +17,9 @@ The built-in providers are:
 | `starlight`  | [Starlight](https://github.com/withastro/starlight)           | `@astrojs/starlight`      | the `astro` bin             |
 | `ox-content` | [Ox Content](https://github.com/ubugeeei-prod/ox-content)     | `@ox-content/vite-plugin` | Vite+'s built-in Vite command |
 
-Vite+ bundles Vite 8, so each provider supports the tool releases that run on Vite 8: VitePress `>=2.0.0-alpha.18`, Vocs `>=2.0.0`, and Starlight `>=0.41.0`. Every published Ox Content release targets Vite 8. `vp doc` reports an unsupported installed version before it runs the tool.
+Vite+ bundles Vite 8, so each provider supports the tool releases that run on Vite 8: VitePress `>=2.0.0-alpha.18`, Vocs `>=2.0.0`, and Starlight `>=0.41.0`. Every published Ox Content release targets Vite 8. A release below the floor fails before the tool runs; a newer release above the known range prints a warning and runs.
+
+A marker alone does not prove an integration is active. Ox Content requires the plugin registered in `vite.config.ts`, and Starlight requires an Astro config file; `vp doc` checks both before it runs and prints the one-line fix.
 
 ## Usage
 
@@ -70,7 +72,7 @@ export default defineConfig({
 
 ## Setting Up a Provider
 
-`vp doc init [PROVIDER]` sets up a provider in place. It scaffolds the tool's starter files and never overwrites existing ones. It installs the dependencies through your package manager. When detection alone would not select the provider, it also writes `doc.provider`.
+`vp doc init [PROVIDER]` sets up a provider in place. It scaffolds the tool's starter files and never overwrites existing ones. It installs the dependencies through your package manager. When detection alone would not select the provider, it also writes `doc.provider`. A retry after a failed install repairs the setup instead of reporting success.
 
 In an interactive terminal, `vp doc` with no provider offers the same setup instead of failing, and continues into the requested command after the install. In CI the command exits with status 1 and prints the exact `vp doc init` invocation to run.
 
@@ -111,12 +113,22 @@ Every `vp doc` subcommand at the root then behaves as an implicit `-C packages/d
 
 ## Caching
 
-Inside a task session, `vp run` recognizes a `vp doc build` script as a Vite+ build and caches it with automatic input and output tracking, like the other built-in commands. `dev` and `preview` run servers and stay uncached.
+Every doc action stays uncached by default, `build` included: a documentation build commonly depends on deployment variables the task runner cannot observe, and a stale replay of another deployment's output costs more than the build. Opt the build into the cache with a `run.tasks` entry that declares the environment and the outputs it depends on:
 
-```json [package.json]
-{
-  "scripts": {
-    "docs:build": "vp doc build"
-  }
-}
+```ts [vite.config.ts]
+import { defineConfig } from 'vite-plus';
+
+export default defineConfig({
+  run: {
+    tasks: {
+      docs: {
+        command: 'vp doc build',
+        env: ['VITE_*', 'SITE_URL'],
+        output: ['dist/**'],
+      },
+    },
+  },
+});
 ```
+
+A plain `"docs:build": "vp doc build"` package script keeps working under `vp run` and runs uncached.

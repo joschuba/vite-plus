@@ -70,9 +70,6 @@ pub struct ProviderDefinition {
     /// hard, while a version above `version_range` only warns
     /// (rfcs/doc-command.md, Unsupported tool version).
     pub version_floor: Option<&'static str>,
-    /// The environment patterns the build cache fingerprints
-    /// (rfcs/doc-command.md, Task Runner and Caching).
-    pub cache_env: &'static [&'static str],
     /// Native-config validation before execution; `None` for standalone
     /// CLI tools whose marker is the executable.
     pub native_config: Option<NativeConfigCheck>,
@@ -96,7 +93,6 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         // earlier 2.0 alphas run Vite 7 or older.
         version_range: Some(">=2.0.0-alpha.18 <3.0.0"),
         version_floor: Some("2.0.0-alpha.18"),
-        cache_env: &["VITE_*", "VITEPRESS_*", "NODE_ENV"],
         native_config: None,
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
@@ -126,7 +122,6 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker_hint: None,
         version_range: Some(">=2.0.0"),
         version_floor: Some("2.0.0"),
-        cache_env: &["VITE_*", "VOCS_*", "NODE_ENV"],
         native_config: None,
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
@@ -144,7 +139,6 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker_hint: None,
         version_range: Some(">=0.41.0"),
         version_floor: Some("0.41.0"),
-        cache_env: &["ASTRO_*", "PUBLIC_*", "NODE_ENV"],
         native_config: Some(NativeConfigCheck::FileExists(&[
             "astro.config.mjs",
             "astro.config.mts",
@@ -183,7 +177,6 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker_hint: None,
         version_range: None,
         version_floor: None,
-        cache_env: &["VITE_*", "NODE_ENV"],
         // The marker cannot prove the plugin is registered; without it the
         // built-in target would build the application instead of the
         // documentation (rfcs/doc-command.md, Built-in Providers).

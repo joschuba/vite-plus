@@ -487,7 +487,6 @@ mod tests {
             marker_hint: None,
             version_range: None,
             version_floor: None,
-            cache_env: &[],
             native_config: None,
             vite_requirement: ">=8.0.0",
             capabilities: &[DocAction::Dev, DocAction::Build],

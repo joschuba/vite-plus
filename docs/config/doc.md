@@ -21,7 +21,7 @@ export default defineConfig({
 
 Selects the documentation provider ahead of dependency detection. Most packages omit the key: a unique provider marker in `dependencies` or `devDependencies` selects the provider by itself.
 
-Set it when detection cannot select one provider. The main case is a migration, where the old and the new marker coexist until the switch completes. `doc.provider` bridges that window. Remove it when you remove the old marker. The selected provider's marker package must still be installed, so a typo or a stale value makes `vp doc` fail before it runs the tool.
+Set it when detection cannot select one provider. The main case is a migration, where the old and the new marker coexist until the switch completes. `doc.provider` bridges that window. Remove it when you remove the old marker. The selected provider's marker must also be declared in `package.json` (any dependency field, `peerDependencies` included) and installed, so a typo, a stale value, or a transitive-only package makes `vp doc` fail before it runs the tool.
 
 The `doc` block is package-level: its home is the config next to the documentation site. Execution targets always come from the built-in provider definitions; the config only selects among them.
 
