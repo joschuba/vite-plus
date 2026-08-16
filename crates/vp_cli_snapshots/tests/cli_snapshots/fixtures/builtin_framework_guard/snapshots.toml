@@ -17,6 +17,7 @@ steps = [
   { argv = ["vp", "dev"], cwd = "renamed-script", comment = "a script that runs the framework dev command under another name becomes the hint target", continue-on-failure = true },
   { argv = ["vp", "build"], cwd = "renamed-script", comment = "the build hint finds the renamed build script the same way", continue-on-failure = true },
   { argv = ["vp", "dev", "--config", "vite.config.ts", "--port", "12312312312"], comment = "an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)", continue-on-failure = true },
+  { argv = ["vp", "dev", "--help"], comment = "a help request reaches the tool, so the guard steps aside" },
   { argv = ["vp", "run", "dev"], comment = "`vp run dev` runs the dev script that the refusal points at" },
 ]
 

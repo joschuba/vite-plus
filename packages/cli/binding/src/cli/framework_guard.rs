@@ -9,8 +9,9 @@
 //! script that runs the framework command, or at the framework CLI through
 //! `vp exec` when no script matches. The guard checks direct invocations
 //! only: a command spawned from a task or package script, for example a
-//! `"dev": "vp dev"` script, runs as invoked. An explicit `--config`/`-c`
-//! flag selects a Vite config on purpose, so it skips the refusal.
+//! `"dev": "vp dev"` script, runs as invoked. Help and version requests
+//! reach the tool, and an explicit `--config`/`-c` flag selects a Vite
+//! config on purpose, so both skip the refusal.
 
 use owo_colors::OwoColorize;
 use vp_shared::output;
@@ -78,6 +79,30 @@ pub(super) fn check(
     subcommand: &SynthesizableSubcommand,
     cwd: &AbsolutePath,
 ) -> Option<ExitStatus> {
+    let (command, manifest, framework, config_file) = find_refusal(subcommand, cwd)?;
+    let built_in = format!("`vp {command}`").bright_blue().to_string();
+    output::error(&format!(
+        "this project uses {name} ({config_file}). {built_in} runs the bundled Vite CLI, \
+         not the {name} CLI.",
+        name = framework.name,
+    ));
+    output::raw_stderr(&format!("hint: {}", run_hint(&manifest, framework, command)));
+    Some(ExitStatus(1))
+}
+
+/// Whether `check` would refuse in `cwd`, without output. The script note
+/// calls this before target resolution: a note that recommends `vpr` must
+/// not print right before a refusal.
+pub(super) fn applies(subcommand: &SynthesizableSubcommand, cwd: &AbsolutePath) -> bool {
+    find_refusal(subcommand, cwd).is_some()
+}
+
+/// The refusal for `cwd`, or `None` when the command can proceed. The
+/// returned manifest is the enclosing `package.json`, for the hint.
+fn find_refusal(
+    subcommand: &SynthesizableSubcommand,
+    cwd: &AbsolutePath,
+) -> Option<(&'static str, serde_json::Value, &'static Framework, &'static str)> {
     let (command, args) = match subcommand {
         SynthesizableSubcommand::Dev { args } => ("dev", args),
         SynthesizableSubcommand::Build { args } => ("build", args),
@@ -88,24 +113,16 @@ pub(super) fn check(
     if super::script_note::spawned_from_script() {
         return None;
     }
-    if has_explicit_config(args) {
+    if asks_help_or_version(args) || selects_explicit_config(args) {
         return None;
     }
     // `vp run` resolves the task from the nearest `package.json`. The same
     // walk here keeps the hint correct from a subdirectory.
     let package = vt_workspace::find_package_root(cwd).ok()?;
     let (framework, config_file) = detect(package.path)?;
-
-    let built_in = format!("`vp {command}`").bright_blue().to_string();
-    output::error(&format!(
-        "this project uses {name} ({config_file}). {built_in} runs the bundled Vite CLI, \
-         not the {name} CLI.",
-        name = framework.name,
-    ));
     let manifest = serde_json::from_slice::<serde_json::Value>(package.package_json.content())
         .unwrap_or(serde_json::Value::Null);
-    output::raw_stderr(&format!("hint: {}", run_hint(&manifest, framework, command)));
-    Some(ExitStatus(1))
+    Some((command, manifest, framework, config_file))
 }
 
 /// The hint that follows the refusal. It points at the first path that works
@@ -170,11 +187,23 @@ fn detect(dir: &AbsolutePath) -> Option<(&'static Framework, &'static str)> {
     None
 }
 
-/// Whether the forwarded Vite args select a config file explicitly. The
-/// capital `-C` flag retargets the directory. It is a different flag and
-/// does not count.
-fn has_explicit_config(args: &[String]) -> bool {
-    args.iter().any(|arg| {
+/// The args the tool would parse as flags: everything before the `--`
+/// terminator. Tokens after the terminator are positionals.
+fn forwarded_flags(args: &[String]) -> impl Iterator<Item = &str> {
+    args.iter().map(String::as_str).take_while(|arg| *arg != "--")
+}
+
+/// Whether the forwarded args ask the tool for help or its version. These
+/// requests must reach the tool: `vp dev --help` prints the Vite help.
+fn asks_help_or_version(args: &[String]) -> bool {
+    forwarded_flags(args).any(super::help::is_app_tool_help_or_version_flag)
+}
+
+/// Whether the forwarded args select a config file explicitly. The capital
+/// `-C` flag retargets the directory. It is a different flag and does not
+/// count.
+fn selects_explicit_config(args: &[String]) -> bool {
+    forwarded_flags(args).any(|arg| {
         arg == "-c" || arg == "--config" || arg.starts_with("--config=") || arg.starts_with("-c=")
     })
 }
@@ -183,7 +212,9 @@ fn has_explicit_config(args: &[String]) -> bool {
 mod tests {
     use vt_path::AbsolutePathBuf;
 
-    use super::{FRAMEWORKS, contains_word, detect, has_explicit_config, run_hint};
+    use super::{
+        FRAMEWORKS, asks_help_or_version, contains_word, detect, run_hint, selects_explicit_config,
+    };
 
     fn framework(name: &str) -> &'static super::Framework {
         FRAMEWORKS.iter().find(|framework| framework.name == name).expect("known framework")
@@ -283,10 +314,23 @@ mod tests {
     #[test]
     fn explicit_config_flags_skip_the_refusal() {
         let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
-        assert!(has_explicit_config(&owned(&["--config", "vite.config.ts"])));
-        assert!(has_explicit_config(&owned(&["--config=vite.config.ts"])));
-        assert!(has_explicit_config(&owned(&["-c", "vite.config.ts"])));
-        assert!(!has_explicit_config(&owned(&["--port", "5000"])));
-        assert!(!has_explicit_config(&owned(&["-C", "apps/web"])));
+        assert!(selects_explicit_config(&owned(&["--config", "vite.config.ts"])));
+        assert!(selects_explicit_config(&owned(&["--config=vite.config.ts"])));
+        assert!(selects_explicit_config(&owned(&["-c", "vite.config.ts"])));
+        assert!(!selects_explicit_config(&owned(&["--port", "5000"])));
+        assert!(!selects_explicit_config(&owned(&["-C", "apps/web"])));
+        assert!(!selects_explicit_config(&owned(&["--", "--config"])));
+    }
+
+    #[test]
+    fn help_and_version_requests_skip_the_refusal() {
+        let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+        assert!(asks_help_or_version(&owned(&["--help"])));
+        assert!(asks_help_or_version(&owned(&["-h"])));
+        assert!(asks_help_or_version(&owned(&["--version"])));
+        assert!(asks_help_or_version(&owned(&["-v"])));
+        assert!(asks_help_or_version(&owned(&["--port", "5000", "--help"])));
+        assert!(!asks_help_or_version(&owned(&["--port", "5000"])));
+        assert!(!asks_help_or_version(&owned(&["--", "--help"])));
     }
 }

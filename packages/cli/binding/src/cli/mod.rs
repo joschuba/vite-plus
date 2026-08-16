@@ -59,9 +59,11 @@ async fn execute_direct_subcommand(
         app_target::AppTarget::Dir(dir) => dir,
         app_target::AppTarget::CurrentDir => cwd,
     };
-    // Elicitation can select a package that the first check never saw, for
-    // example a `defaultPackage` that holds a Nuxt or Astro app.
-    if retargeted && let Some(exit) = framework_guard::check(&subcommand, cwd) {
+    // The refusal belongs to the resolved target: elicitation or
+    // `defaultPackage` can select a package that the invocation directory
+    // never saw, or move the command out of a framework root into a plain
+    // Vite app.
+    if let Some(exit) = framework_guard::check(&subcommand, cwd) {
         return Ok(exit);
     }
 
@@ -393,18 +395,20 @@ pub async fn main(
 
     match cli_args {
         CLIArgs::Synthesizable(subcmd) => {
-            // A Nuxt or Astro project cannot run through the bundled Vite
-            // CLI. Refuse before the script note recommends a different
-            // path.
-            if let Some(exit) = framework_guard::check(&subcmd, &cwd) {
-                return Ok(exit);
-            }
             // Only the built-ins can be mistaken for a script. `run`/`cache`
             // below are the script path itself; `install` and friends
             // legitimately trigger a project's `install` lifecycle scripts
             // through the package manager, so redirecting those to `vpr` would
             // be wrong; and `exec` names a binary rather than a task.
-            script_note::print(raw_subcommand.as_deref(), &cwd);
+            //
+            // The framework refusal itself runs after target resolution in
+            // `execute_direct_subcommand`, because `defaultPackage` can move
+            // the command out of a framework root. The note still must not
+            // recommend `vpr` right before a refusal, so a refusal in the
+            // invocation package silences it.
+            if !framework_guard::applies(&subcmd, &cwd) {
+                script_note::print(raw_subcommand.as_deref(), &cwd);
+            }
             execute_direct_subcommand(subcmd, &cwd, options).await
         }
         CLIArgs::ViteTask(command) => execute_vite_task_command(command, cwd, options).await,
