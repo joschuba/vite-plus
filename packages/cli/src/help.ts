@@ -1063,7 +1063,7 @@ const commandHelpDocs = {
   doc: {
     usage: 'vp doc [OPTIONS] [COMMAND] [TOOL_ARGS]...',
     summary: [
-      "Run the project's documentation tool through its provider.",
+      "Serve, build, and preview the documentation with the project's tool.",
       'Arguments after the command are forwarded to the tool.',
     ],
     sections: [

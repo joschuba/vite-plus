@@ -9,7 +9,7 @@ VITE+ - The Unified Toolchain for the Web
 
 Usage: vp doc [OPTIONS] [COMMAND] [TOOL_ARGS]...
 
-Run the project's documentation tool through its provider.
+Serve, build, and preview the documentation with the project's tool.
 Arguments after the command are forwarded to the tool.
 
 Commands:
