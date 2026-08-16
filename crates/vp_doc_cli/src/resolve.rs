@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::{
     cli::{DocAction, DocRequest},
     config::DocConfigContext,
-    detect::{detect_providers, find_installed_package, find_nearest_manifest},
+    detect::{
+        detect_providers, find_installed_package, find_nearest_manifest, marker_declared_any_field,
+    },
     error::{Error, user_message},
-    providers::{DOC_PROVIDERS, ProviderDefinition, ProviderTarget, init_providers},
+    providers::{
+        DOC_PROVIDERS, NativeConfigCheck, ProviderDefinition, ProviderTarget, init_providers,
+    },
 };
 
 /// How the provider was selected (rfcs/doc-command.md, Provider Selection).
@@ -46,6 +50,10 @@ pub struct DocExecution {
     pub provider: &'static ProviderDefinition,
     pub source: SelectionSource,
     pub resolution: DocResolution,
+    /// A version above the supported range warns and runs; the caller
+    /// prints this to stderr (rfcs/doc-command.md, Unsupported tool
+    /// version).
+    pub warning: Option<String>,
 }
 
 fn marker_list() -> String {
@@ -80,6 +88,18 @@ pub enum ProviderSelection {
     /// can offer initialization; `resolve` reports
     /// [`no_provider_message`] instead.
     NoProvider,
+    /// More than one marker in the nearest manifest. `resolve` reports the
+    /// misconfiguration; `info` reports the candidates with its own
+    /// status.
+    Multiple(Vec<&'static ProviderDefinition>),
+}
+
+/// The misconfiguration diagnostic for more than one declared marker.
+pub(crate) fn multiple_markers_message(detected: &[&'static ProviderDefinition]) -> String {
+    let ids = detected.iter().map(|provider| provider.id).collect::<Vec<_>>().join(", ");
+    format!(
+        "multiple documentation providers are declared: {ids}\n\nRemove the markers you do not use, or set `doc.provider` in vite.config.ts\nduring a migration."
+    )
 }
 
 /// The non-interactive no-provider diagnostic (rfcs/doc-command.md).
@@ -104,18 +124,61 @@ pub fn select_provider(
 ) -> Result<ProviderSelection, Error> {
     if let Some(id) = context.and_then(|context| context.config.provider.as_deref()) {
         let provider = lookup_provider(id)?;
+        // Explicit selection still requires a declaration, so a transitive
+        // package that an unrelated update can drop never carries the
+        // selection. Every dependency field counts here, peers included: a
+        // theme package peers on its tool and states the selection in
+        // config (rfcs/doc-command.md, Explicit provider validation).
+        let declared = find_nearest_manifest(root)?
+            .is_some_and(|manifest| marker_declared_any_field(&manifest, provider.marker));
+        if !declared {
+            return Err(user_message(format!(
+                "`doc.provider` selects `{}`, but `{}` is not declared in package.json",
+                provider.id, provider.marker
+            )));
+        }
         return Ok(ProviderSelection::Selected { provider, source: SelectionSource::Config });
     }
 
-    let detected =
-        find_nearest_manifest(root).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
+    let detected = find_nearest_manifest(root)?
+        .map(|manifest| detect_providers(&manifest))
+        .unwrap_or_default();
     match detected.as_slice() {
         [] => Ok(ProviderSelection::NoProvider),
         [provider] => Ok(ProviderSelection::Selected { provider, source: SelectionSource::Marker }),
-        detected => {
-            let ids = detected.iter().map(|provider| provider.id).collect::<Vec<_>>().join(", ");
+        _ => Ok(ProviderSelection::Multiple(detected)),
+    }
+}
+
+/// Native-config validation for integration-flavored providers: a marker
+/// cannot prove that an integration is active, and without it the built-in
+/// target would build the application instead of the documentation
+/// (rfcs/doc-command.md, Built-in Providers).
+fn validate_native_config(provider: &ProviderDefinition, cwd: &Path) -> Result<(), Error> {
+    match provider.native_config {
+        None => Ok(()),
+        Some(NativeConfigCheck::FileExists(names)) => {
+            if names.iter().any(|name| cwd.join(name).is_file()) {
+                return Ok(());
+            }
             Err(user_message(format!(
-                "multiple documentation providers are declared: {ids}\n\nRemove the markers you do not use, or set `doc.provider` in vite.config.ts\nduring a migration."
+                "provider `{}` requires an Astro config file ({}) in the effective root\n\nRun `vp doc init {}` to set one up.",
+                provider.id, names[0], provider.id
+            )))
+        }
+        Some(NativeConfigCheck::ViteConfigMentions(package)) => {
+            let config =
+                vt_path::AbsolutePath::new(cwd).and_then(vp_static_config::resolve_config_path);
+            let registered = config.is_some_and(|path| {
+                std::fs::read_to_string(path.as_path())
+                    .is_ok_and(|contents| contents.contains(package))
+            });
+            if registered {
+                return Ok(());
+            }
+            Err(user_message(format!(
+                "provider `{}` requires `{package}` registered in vite.config.ts\n\nAdd the plugin to `plugins`, or run `vp doc init {}`.",
+                provider.id, provider.id
             )))
         }
     }
@@ -158,6 +221,9 @@ pub fn resolve(
     let (provider, source) = match select_provider(context, cwd)? {
         ProviderSelection::Selected { provider, source } => (provider, source),
         ProviderSelection::NoProvider => return Err(user_message(no_provider_message())),
+        ProviderSelection::Multiple(detected) => {
+            return Err(user_message(multiple_markers_message(&detected)));
+        }
     };
 
     ensure_capability(provider, request.action)?;
@@ -171,18 +237,38 @@ pub fn resolve(
         )));
     };
 
+    // The version gate: below the floor is known incompatible and fails;
+    // above the range is unknown rather than known-broken, so it warns and
+    // runs (rfcs/doc-command.md, Unsupported tool version).
+    let mut warning = None;
     if let Some(range) = provider.version_range {
         let version = marker.version();
         let satisfied = version.is_some_and(|version| version_satisfies(version, range));
         if !satisfied {
-            return Err(user_message(format!(
-                "`vp doc` supports {display}, but found {marker}@{version}\n\nInstall a {display} release (`{range}`).",
-                display = provider.display_name,
-                marker = provider.marker,
-                version = version.unwrap_or("unknown"),
-            )));
+            let above_range =
+                version.zip(provider.version_floor).is_some_and(|(version, floor)| {
+                    match (version.parse::<node_semver::Version>(), floor.parse()) {
+                        (Ok(version), Ok(floor)) => version >= floor,
+                        _ => false,
+                    }
+                });
+            if !above_range {
+                return Err(user_message(format!(
+                    "`vp doc` supports {display}, but found {marker}@{version}\n\nInstall a {display} release (`{range}`).",
+                    display = provider.display_name,
+                    marker = provider.marker,
+                    version = version.unwrap_or("unknown"),
+                )));
+            }
+            warning = Some(format!(
+                "{}@{} is above the supported range (`{range}`); running it anyway",
+                provider.marker,
+                version.unwrap_or("unknown"),
+            ));
         }
     }
+
+    validate_native_config(provider, cwd)?;
 
     let mut args = vec![request.action.as_str().to_string()];
     args.extend(request.args.iter().cloned());
@@ -216,7 +302,7 @@ pub fn resolve(
             DocResolution::PackageBin { bin_path: executable.root.join(bin_relative), args }
         }
     };
-    Ok(DocExecution { provider, source, resolution })
+    Ok(DocExecution { provider, source, resolution, warning })
 }
 
 #[cfg(test)]
@@ -238,6 +324,10 @@ mod tests {
         }
         fs::create_dir_all(&package_root).unwrap();
         fs::write(package_root.join("package.json"), manifest).unwrap();
+    }
+
+    fn write_astro_config(dir: &Path) {
+        fs::write(dir.join("astro.config.mjs"), "// astro config\n").unwrap();
     }
 
     fn install_vocs(dir: &Path) {
@@ -293,10 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_nearest_manifest_declares_nothing() {
-        // The walk stops at the first package.json; a malformed one must
-        // not pick up a marker from an ancestor package
-        // (rfcs/doc-command.md, Monorepos).
+    fn a_malformed_nearest_manifest_is_an_error() {
+        // The walk stops at the first package.json, and corruption is
+        // reported with the path instead of converting into the
+        // no-provider flow (rfcs/doc-command.md, Monorepos).
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), r#"{ "devDependencies": { "vitepress": "^2.0.0-0" } }"#);
         let nested = dir.path().join("packages/docs");
@@ -306,7 +396,8 @@ mod tests {
         let Error::UserMessage(message) = error else {
             panic!("expected a user message");
         };
-        assert!(message.contains("no documentation provider is configured"), "{message}");
+        assert!(message.contains("cannot parse"), "{message}");
+        assert!(message.contains("package.json"), "{message}");
     }
 
     #[test]
@@ -348,9 +439,24 @@ mod tests {
     }
 
     #[test]
-    fn config_provider_not_installed() {
+    fn config_provider_requires_a_declaration() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), "{}");
+        let context = context(dir.path(), Some("vocs"));
+        let error = resolve(&build_request(), dir.path(), Some(&context)).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert_eq!(
+            message,
+            "`doc.provider` selects `vocs`, but `vocs` is not declared in package.json"
+        );
+    }
+
+    #[test]
+    fn config_provider_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vocs": "^2.0.0" } }"#);
         let context = context(dir.path(), Some("vocs"));
         let error = resolve(&build_request(), dir.path(), Some(&context)).unwrap_err();
         let Error::UserMessage(message) = error else {
@@ -361,6 +467,18 @@ mod tests {
     }
 
     #[test]
+    fn config_provider_accepts_a_peer_declaration() {
+        // A theme package peers on its tool and states the selection in
+        // config: explicit selection accepts every dependency field.
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "peerDependencies": { "vocs": "^2.0.0" } }"#);
+        install_vocs(dir.path());
+        let context = context(dir.path(), Some("vocs"));
+        let execution = resolve(&build_request(), dir.path(), Some(&context)).unwrap();
+        assert!(matches!(execution.resolution, DocResolution::PackageBin { .. }));
+    }
+
+    #[test]
     fn unsupported_action_fails_before_process_creation() {
         static LIMITED: ProviderDefinition = ProviderDefinition {
             id: "limited",
@@ -368,6 +486,9 @@ mod tests {
             marker: "limited",
             marker_hint: None,
             version_range: None,
+            version_floor: None,
+            cache_env: &[],
+            native_config: None,
             vite_requirement: ">=8.0.0",
             capabilities: &[DocAction::Dev, DocAction::Build],
             target: ProviderTarget::PackageBin { package_name: "limited", bin_name: "limited" },
@@ -430,12 +551,71 @@ mod tests {
             "@ox-content/vite-plugin",
             r#"{ "name": "@ox-content/vite-plugin", "version": "1.1.0" }"#,
         );
+        fs::write(
+            dir.path().join("vite.config.ts"),
+            "import { oxContent } from '@ox-content/vite-plugin';\nexport default { plugins: [oxContent()] };\n",
+        )
+        .unwrap();
         let request = DocRequest { action: DocAction::Dev, args: vec!["--open".to_string()] };
         let resolution = resolve(&request, dir.path(), None).unwrap();
         let DocResolution::BuiltinVite { args } = resolution.resolution else {
             panic!("expected the built-in Vite target");
         };
         assert_eq!(args, ["dev", "--open"]);
+    }
+
+    #[test]
+    fn ox_content_requires_the_plugin_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"{ "devDependencies": { "@ox-content/vite-plugin": "^1.1.0" } }"#,
+        );
+        install_package(
+            dir.path(),
+            "@ox-content/vite-plugin",
+            r#"{ "name": "@ox-content/vite-plugin", "version": "1.1.0" }"#,
+        );
+        // A vite config without the plugin: the marker cannot prove the
+        // integration is active, and running would build the application.
+        fs::write(dir.path().join("vite.config.ts"), "export default {};\n").unwrap();
+        let error = resolve(&build_request(), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("requires `@ox-content/vite-plugin` registered"), "{message}");
+    }
+
+    #[test]
+    fn starlight_without_an_astro_config_fails_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#);
+        install_package(
+            dir.path(),
+            "@astrojs/starlight",
+            r#"{ "name": "@astrojs/starlight", "version": "0.41.7" }"#,
+        );
+        let error = resolve(&build_request(), dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("requires an Astro config file"), "{message}");
+    }
+
+    #[test]
+    fn a_version_above_the_range_warns_and_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vitepress": "^3.0.0" } }"#);
+        install_package(
+            dir.path(),
+            "vitepress",
+            r#"{ "name": "vitepress", "version": "3.0.0", "bin": { "vitepress": "bin/vitepress.js" } }"#,
+        );
+        let execution = resolve(&build_request(), dir.path(), None).unwrap();
+        let warning = execution.warning.expect("an above-range version warns");
+        assert!(warning.contains("vitepress@3.0.0"), "{warning}");
+        assert!(warning.contains("above the supported range"), "{warning}");
+        assert!(matches!(execution.resolution, DocResolution::PackageBin { .. }));
     }
 
     #[test]
@@ -475,6 +655,7 @@ mod tests {
     fn starlight_resolves_the_astro_bin() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#);
+        write_astro_config(dir.path());
         let marker_root = dir.path().join("node_modules/@astrojs/starlight");
         fs::create_dir_all(&marker_root).unwrap();
         fs::write(
@@ -500,6 +681,7 @@ mod tests {
     fn starlight_missing_executable_package() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(dir.path(), r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#);
+        write_astro_config(dir.path());
         let marker_root = dir.path().join("node_modules/@astrojs/starlight");
         fs::create_dir_all(&marker_root).unwrap();
         fs::write(

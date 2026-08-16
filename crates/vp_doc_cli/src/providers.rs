@@ -30,6 +30,17 @@ pub struct StarterFile {
     pub content: &'static str,
 }
 
+/// A provider-specific native-config validation that runs before
+/// execution: a dependency marker cannot prove that an integration is
+/// active (rfcs/doc-command.md, Built-in Providers).
+#[derive(Debug, Clone, Copy)]
+pub enum NativeConfigCheck {
+    /// The effective root's Vite config file must mention this package.
+    ViteConfigMentions(&'static str),
+    /// One of these files must exist in the effective root.
+    FileExists(&'static [&'static str]),
+}
+
 /// One-command setup support for `vp doc init`.
 #[derive(Debug)]
 pub struct ProviderInit {
@@ -55,6 +66,16 @@ pub struct ProviderDefinition {
     /// tool's first release on Vite 8 (rfcs/doc-command.md, The Vite
     /// requirement); `None` means every published release satisfies it.
     pub version_range: Option<&'static str>,
+    /// The known-incompatible boundary: a version below this floor fails
+    /// hard, while a version above `version_range` only warns
+    /// (rfcs/doc-command.md, Unsupported tool version).
+    pub version_floor: Option<&'static str>,
+    /// The environment patterns the build cache fingerprints
+    /// (rfcs/doc-command.md, Task Runner and Caching).
+    pub cache_env: &'static [&'static str],
+    /// Native-config validation before execution; `None` for standalone
+    /// CLI tools whose marker is the executable.
+    pub native_config: Option<NativeConfigCheck>,
     /// The Vite range the tool's supported releases run on. Declarative
     /// data; enforcement rides `version_range`.
     pub vite_requirement: &'static str,
@@ -74,16 +95,21 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         // `2.0.0-alpha.18` is the first VitePress release on Vite 8; the
         // earlier 2.0 alphas run Vite 7 or older.
         version_range: Some(">=2.0.0-alpha.18 <3.0.0"),
+        version_floor: Some("2.0.0-alpha.18"),
+        cache_env: &["VITE_*", "VITEPRESS_*", "NODE_ENV"],
+        native_config: None,
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::PackageBin { package_name: "vitepress", bin_name: "vitepress" },
         init: Some(ProviderInit {
-            // `next` is the VitePress 2 dist-tag while 2.0 is prerelease; a
-            // range spec replaces it when 2.0 reaches `latest`. The
-            // `vite:doc` create template carries its own VitePress starter
+            // A range spec, never a mutable dist-tag: `vitepress@next`
+            // would install VitePress 3 the moment the tag moves, and the
+            // same binary would then reject it (rfcs/doc-command.md,
+            // Initialization). The `vite:doc` create template carries its
+            // own VitePress starter
             // (packages/cli/src/create/templates/doc.ts); keep the two in
             // step when the VitePress line or the first page changes.
-            dependencies: &["vitepress@next"],
+            dependencies: &["vitepress@>=2.0.0-alpha.18 <3.0.0"],
             starter_files: &[StarterFile {
                 path: "index.md",
                 content: "# Hello VitePress\n\nStart the dev server with `vp doc`.\n",
@@ -99,6 +125,9 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker: "vocs",
         marker_hint: None,
         version_range: Some(">=2.0.0"),
+        version_floor: Some("2.0.0"),
+        cache_env: &["VITE_*", "VOCS_*", "NODE_ENV"],
+        native_config: None,
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::PackageBin { package_name: "vocs", bin_name: "vocs" },
@@ -114,6 +143,14 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker: "@astrojs/starlight",
         marker_hint: None,
         version_range: Some(">=0.41.0"),
+        version_floor: Some("0.41.0"),
+        cache_env: &["ASTRO_*", "PUBLIC_*", "NODE_ENV"],
+        native_config: Some(NativeConfigCheck::FileExists(&[
+            "astro.config.mjs",
+            "astro.config.mts",
+            "astro.config.js",
+            "astro.config.ts",
+        ])),
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::PackageBin { package_name: "astro", bin_name: "astro" },
@@ -145,6 +182,12 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
         marker: "@ox-content/vite-plugin",
         marker_hint: None,
         version_range: None,
+        version_floor: None,
+        cache_env: &["VITE_*", "NODE_ENV"],
+        // The marker cannot prove the plugin is registered; without it the
+        // built-in target would build the application instead of the
+        // documentation (rfcs/doc-command.md, Built-in Providers).
+        native_config: Some(NativeConfigCheck::ViteConfigMentions("@ox-content/vite-plugin")),
         vite_requirement: ">=8.0.0",
         capabilities: &[DocAction::Dev, DocAction::Build, DocAction::Preview],
         target: ProviderTarget::BuiltinVite,

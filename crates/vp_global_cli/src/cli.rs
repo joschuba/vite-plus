@@ -540,6 +540,10 @@ fn should_force_global_delegate(command: &str, args: &[String]) -> bool {
 /// protocol / formatted source; the cosmetic banner would corrupt that stream.
 fn should_suppress_header_for_subcommand(command: &str, args: &[String]) -> bool {
     match command {
+        // `doc info` is a report; `--json` must stay one pure JSON
+        // document on stdout (rfcs/doc-command.md, Delegation and Process
+        // Behavior).
+        "doc" => args.first().is_some_and(|arg| arg == "info"),
         "lint" => has_flag_before_terminator(args, "--lsp"),
         "fmt" => {
             has_flag_before_terminator(args, "--lsp")

@@ -23,6 +23,7 @@ Vite+ bundles Vite 8, so each provider supports the tool releases that run on Vi
 
 ```bash
 vp doc                  # start the dev server (the default)
+vp doc --port 4173      # a leading option forwards to dev
 vp doc dev --host 0.0.0.0
 vp doc build
 vp doc preview --port 4173
@@ -80,11 +81,14 @@ In an interactive terminal, `vp doc` with no provider offers the same setup inst
 ```bash
 $ vp doc info --json
 {
+  "schemaVersion": 1,
+  "status": "ready",
   "provider": "starlight",
   "displayName": "Starlight",
-  "source": { "kind": "dependency-marker", "marker": "@astrojs/starlight" },
-  "target": "package-bin",
-  "tool": { "package": "astro", "version": "7.2.2", "supportedRange": ">=0.41.0", "versionSupported": true },
+  "source": { "kind": "dependency-marker" },
+  "marker": { "package": "@astrojs/starlight", "version": "0.41.7" },
+  "execution": { "kind": "package-bin", "package": "astro", "version": "7.2.2", "bin": "astro" },
+  "compatibility": { "subject": "@astrojs/starlight", "supportedRange": ">=0.41.0", "supported": true },
   "commands": ["dev", "build", "preview"]
 }
 ```

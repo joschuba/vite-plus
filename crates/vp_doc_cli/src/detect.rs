@@ -6,7 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::providers::{DOC_PROVIDERS, ProviderDefinition};
+use crate::{
+    error::{Error, user_message},
+    providers::{DOC_PROVIDERS, ProviderDefinition},
+};
 
 // `peerDependencies` is deliberately excluded: a theme or plugin package
 // peers on its tool without being a documentation site
@@ -15,22 +18,42 @@ const DEPENDENCY_FIELDS: &[&str] = &["dependencies", "devDependencies"];
 
 /// The nearest `package.json` manifest, walking up from the start
 /// directory. The walk stops at the first `package.json` file: detection
-/// reads only the nearest manifest, and a malformed one declares nothing
-/// (rfcs/doc-command.md, Monorepos). Continuing past it could select a
-/// provider from an ancestor package.
-pub(crate) fn find_nearest_manifest(start: &Path) -> Option<serde_json::Value> {
+/// reads only the nearest manifest, and continuing past it could select a
+/// provider from an ancestor package. A manifest that cannot be read or
+/// parsed is an error naming the path: repository corruption must not
+/// convert into the no-provider flow (rfcs/doc-command.md, Monorepos).
+pub(crate) fn find_nearest_manifest(start: &Path) -> Result<Option<serde_json::Value>, Error> {
     let mut dir = start.to_path_buf();
     loop {
         let manifest_path = dir.join("package.json");
         if manifest_path.is_file() {
-            return fs::read_to_string(&manifest_path)
-                .ok()
-                .and_then(|contents| serde_json::from_str(&contents).ok());
+            let contents = fs::read_to_string(&manifest_path).map_err(|error| {
+                user_message(format!("cannot read {}: {error}", manifest_path.display()))
+            })?;
+            let manifest = serde_json::from_str(&contents).map_err(|error| {
+                user_message(format!("cannot parse {}: {error}", manifest_path.display()))
+            })?;
+            return Ok(Some(manifest));
         }
         if !dir.pop() {
-            return None;
+            return Ok(None);
         }
     }
+}
+
+/// True when the manifest declares the marker in any dependency field,
+/// `peerDependencies` included. Explicit `doc.provider` selection accepts
+/// every field, while detection alone stays on `DEPENDENCY_FIELDS`
+/// (rfcs/doc-command.md, Explicit provider validation).
+pub(crate) fn marker_declared_any_field(manifest: &serde_json::Value, marker: &str) -> bool {
+    ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].iter().any(
+        |field| {
+            manifest
+                .get(field)
+                .and_then(|deps| deps.as_object())
+                .is_some_and(|deps| deps.contains_key(marker))
+        },
+    )
 }
 
 /// Providers whose marker satisfies the given declared-dependency check.

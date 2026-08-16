@@ -10,33 +10,46 @@ use crate::{
     resolve::{self, SelectionSource},
 };
 
-/// The tool half of the report: the executable package. For a host-bin
-/// provider such as Starlight this differs from the marker; the version
-/// gate (`supported_range`/`version_supported`) stays on the marker.
-#[derive(Debug)]
-pub struct DocToolInfo {
-    pub package: &'static str,
-    pub version: Option<String>,
-    pub supported_range: Option<&'static str>,
-    pub version_supported: bool,
-}
-
-/// A report that resolved to a usable provider.
+/// A report that resolved to a usable provider. The marker and the
+/// execution target stay separate subjects, so a consumer can tell which
+/// package the version gate checked (rfcs/doc-command.md, Selection
+/// reporting).
 #[derive(Debug)]
 pub struct DocInfoResolved {
     pub provider: &'static ProviderDefinition,
     pub source: SelectionSource,
-    pub tool: DocToolInfo,
+    /// The installed version of the marker package, the subject of the
+    /// version gate.
+    pub marker_version: Option<String>,
+    /// The installed version of the execution package (`astro` for
+    /// Starlight); equals `marker_version` when the two coincide.
+    pub execution_version: Option<String>,
+    /// The marker version against the provider's tool version range.
+    pub supported: bool,
 }
 
-/// The `vp doc info` report: either a resolved provider or the unresolved
-/// state with its candidates (empty for no provider, several for multiple
-/// markers).
+impl DocInfoResolved {
+    /// The executable package: the bin package for a package-bin target,
+    /// the marker itself for the built-in Vite target.
+    pub fn execution_package(&self) -> &'static str {
+        match self.provider.target {
+            ProviderTarget::PackageBin { package_name, .. } => package_name,
+            ProviderTarget::BuiltinVite => self.provider.marker,
+        }
+    }
+}
+
+/// The `vp doc info` report: `status` names the resolution state.
 #[derive(Debug)]
 pub enum DocInfoReport {
     Resolved(DocInfoResolved),
-    Unresolved { candidates: Vec<&'static str> },
+    NoProvider,
+    MultipleProviders { candidates: Vec<&'static str> },
 }
+
+/// The JSON schema version; changes with the shape
+/// (rfcs/doc-command.md, Selection reporting).
+const SCHEMA_VERSION: u32 = 1;
 
 impl DocInfoReport {
     /// The report resolves to a usable provider.
@@ -44,51 +57,60 @@ impl DocInfoReport {
         matches!(self, DocInfoReport::Resolved(_))
     }
 
-    /// The RFC's JSON shape (rfcs/doc-command.md, Selection reporting).
-    /// Keys are inserted in the documented order.
+    /// The RFC's JSON shape. Keys are inserted in the documented order.
     pub fn to_json(&self) -> serde_json::Value {
+        let mut report = serde_json::Map::new();
+        report.insert("schemaVersion".into(), SCHEMA_VERSION.into());
         match self {
             DocInfoReport::Resolved(info) => {
+                let provider = info.provider;
+                report.insert("status".into(), "ready".into());
+                report.insert("provider".into(), provider.id.into());
+                report.insert("displayName".into(), provider.display_name.into());
                 let mut source = serde_json::Map::new();
-                match info.source {
-                    SelectionSource::Config => {
-                        source.insert("kind".into(), "config".into());
-                    }
-                    SelectionSource::Marker => {
-                        source.insert("kind".into(), "dependency-marker".into());
-                        source.insert("marker".into(), info.provider.marker.into());
-                    }
-                }
-                let mut tool = serde_json::Map::new();
-                tool.insert("package".into(), info.tool.package.into());
-                tool.insert(
-                    "version".into(),
-                    info.tool.version.as_deref().map_or(serde_json::Value::Null, Into::into),
+                source.insert(
+                    "kind".into(),
+                    match info.source {
+                        SelectionSource::Config => "config".into(),
+                        SelectionSource::Marker => "dependency-marker".into(),
+                    },
                 );
-                if let Some(range) = info.tool.supported_range {
-                    tool.insert("supportedRange".into(), range.into());
-                }
-                tool.insert("versionSupported".into(), info.tool.version_supported.into());
-                let mut report = serde_json::Map::new();
-                report.insert("provider".into(), info.provider.id.into());
-                report.insert("displayName".into(), info.provider.display_name.into());
                 report.insert("source".into(), source.into());
-                report.insert("target".into(), info.provider.target.as_str().into());
-                report.insert("tool".into(), tool.into());
+                let mut marker = serde_json::Map::new();
+                marker.insert("package".into(), provider.marker.into());
+                marker.insert("version".into(), json_version(info.marker_version.as_deref()));
+                report.insert("marker".into(), marker.into());
+                let mut execution = serde_json::Map::new();
+                execution.insert("kind".into(), provider.target.as_str().into());
+                execution.insert("package".into(), info.execution_package().into());
+                execution.insert("version".into(), json_version(info.execution_version.as_deref()));
+                if let ProviderTarget::PackageBin { bin_name, .. } = provider.target {
+                    execution.insert("bin".into(), bin_name.into());
+                }
+                report.insert("execution".into(), execution.into());
+                let mut compatibility = serde_json::Map::new();
+                compatibility.insert("subject".into(), provider.marker.into());
+                if let Some(range) = provider.version_range {
+                    compatibility.insert("supportedRange".into(), range.into());
+                }
+                compatibility.insert("supported".into(), info.supported.into());
+                report.insert("compatibility".into(), compatibility.into());
                 report.insert(
                     "commands".into(),
-                    info.provider
+                    provider
                         .capabilities
                         .iter()
                         .map(|action| action.as_str().into())
                         .collect::<Vec<serde_json::Value>>()
                         .into(),
                 );
-                report.into()
             }
-            DocInfoReport::Unresolved { candidates } => {
-                let mut report = serde_json::Map::new();
-                report.insert("provider".into(), serde_json::Value::Null);
+            DocInfoReport::NoProvider => {
+                report.insert("status".into(), "no-provider".into());
+                report.insert("candidates".into(), Vec::<serde_json::Value>::new().into());
+            }
+            DocInfoReport::MultipleProviders { candidates } => {
+                report.insert("status".into(), "multiple-providers".into());
                 report.insert(
                     "candidates".into(),
                     candidates
@@ -97,10 +119,14 @@ impl DocInfoReport {
                         .collect::<Vec<serde_json::Value>>()
                         .into(),
                 );
-                report.into()
             }
         }
+        report.into()
     }
+}
+
+fn json_version(version: Option<&str>) -> serde_json::Value {
+    version.map_or(serde_json::Value::Null, Into::into)
 }
 
 fn build_resolved(
@@ -112,53 +138,35 @@ fn build_resolved(
         .as_ref()
         .and_then(|package| package.version())
         .map(str::to_string);
-    let version_supported = marker_version.as_deref().is_some_and(|version| {
+    let supported = marker_version.as_deref().is_some_and(|version| {
         provider.version_range.is_none_or(|range| resolve::version_satisfies(version, range))
     });
-    let tool_package = match provider.target {
+    let execution_package = match provider.target {
         ProviderTarget::PackageBin { package_name, .. } => package_name,
         ProviderTarget::BuiltinVite => provider.marker,
     };
-    let tool_version = if tool_package == provider.marker {
-        marker_version
+    let execution_version = if execution_package == provider.marker {
+        marker_version.clone()
     } else {
-        find_installed_package(tool_package, root)
+        find_installed_package(execution_package, root)
             .as_ref()
             .and_then(|package| package.version())
             .map(str::to_string)
     };
-    DocInfoResolved {
-        provider,
-        source,
-        tool: DocToolInfo {
-            package: tool_package,
-            version: tool_version,
-            supported_range: provider.version_range,
-            version_supported,
-        },
-    }
+    DocInfoResolved { provider, source, marker_version, execution_version, supported }
 }
 
 /// Build the info report from the effective root. Reads only manifests and
-/// the statically extracted config. An invalid `doc.provider` value is a
-/// user error, the same as in the actions.
+/// the statically extracted config; an invalid `doc.provider` value or a
+/// malformed manifest is a user error, the same as in the actions.
 pub fn info_report(cwd: &Path, context: Option<&DocConfigContext>) -> Result<DocInfoReport, Error> {
-    match resolve::select_provider(context, cwd) {
-        Ok(resolve::ProviderSelection::Selected { provider, source }) => {
+    match resolve::select_provider(context, cwd)? {
+        resolve::ProviderSelection::Selected { provider, source } => {
             Ok(DocInfoReport::Resolved(build_resolved(provider, source, cwd)))
         }
-        Err(Error::UserMessage(message))
-            if context.is_some_and(|context| context.config.provider.is_some()) =>
-        {
-            Err(Error::UserMessage(message))
-        }
-        Ok(resolve::ProviderSelection::NoProvider) | Err(_) => Ok(DocInfoReport::Unresolved {
-            candidates: crate::detect::find_nearest_manifest(cwd)
-                .map(|manifest| crate::detect::detect_providers(&manifest))
-                .unwrap_or_default()
-                .iter()
-                .map(|provider| provider.id)
-                .collect(),
+        resolve::ProviderSelection::NoProvider => Ok(DocInfoReport::NoProvider),
+        resolve::ProviderSelection::Multiple(detected) => Ok(DocInfoReport::MultipleProviders {
+            candidates: detected.iter().map(|provider| provider.id).collect(),
         }),
     }
 }
@@ -170,7 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_provider_reports_the_executable_as_the_tool() {
+    fn split_provider_reports_marker_and_execution_separately() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("package.json"),
@@ -196,20 +204,26 @@ mod tests {
             panic!("expected a resolved report");
         };
         assert_eq!(info.provider.id, "starlight");
-        assert_eq!(info.tool.package, "astro");
-        assert_eq!(info.tool.version.as_deref(), Some("7.2.2"));
-        // The version gate stays on the marker package.
-        assert!(info.tool.version_supported);
+        assert_eq!(info.marker_version.as_deref(), Some("0.41.7"));
+        assert_eq!(info.execution_package(), "astro");
+        assert_eq!(info.execution_version.as_deref(), Some("7.2.2"));
+        assert!(info.supported);
         let json = report.to_json();
-        assert_eq!(json["provider"], "starlight");
+        assert_eq!(json["schemaVersion"], 1);
+        assert_eq!(json["status"], "ready");
         assert_eq!(json["source"]["kind"], "dependency-marker");
-        assert_eq!(json["source"]["marker"], "@astrojs/starlight");
-        assert_eq!(json["tool"]["package"], "astro");
+        assert_eq!(json["marker"]["package"], "@astrojs/starlight");
+        assert_eq!(json["marker"]["version"], "0.41.7");
+        assert_eq!(json["execution"]["kind"], "package-bin");
+        assert_eq!(json["execution"]["package"], "astro");
+        assert_eq!(json["execution"]["bin"], "astro");
+        assert_eq!(json["compatibility"]["subject"], "@astrojs/starlight");
+        assert_eq!(json["compatibility"]["supported"], true);
         assert_eq!(json["commands"][0], "dev");
     }
 
     #[test]
-    fn unresolved_report_lists_the_candidates() {
+    fn multiple_markers_report_their_status_and_candidates() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("package.json"),
@@ -217,12 +231,25 @@ mod tests {
         )
         .unwrap();
         let report = info_report(dir.path(), None).unwrap();
-        let DocInfoReport::Unresolved { candidates } = &report else {
-            panic!("expected an unresolved report");
+        let DocInfoReport::MultipleProviders { candidates } = &report else {
+            panic!("expected the multiple-providers state");
         };
         assert_eq!(candidates, &["vitepress", "vocs"]);
         let json = report.to_json();
-        assert_eq!(json["provider"], serde_json::Value::Null);
+        assert_eq!(json["status"], "multiple-providers");
         assert_eq!(json["candidates"][1], "vocs");
+        assert!(!report.resolved());
+    }
+
+    #[test]
+    fn a_malformed_manifest_is_an_error_not_a_state() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), "{ not json").unwrap();
+        let error = info_report(dir.path(), None).unwrap_err();
+        let Error::UserMessage(message) = error else {
+            panic!("expected a user message");
+        };
+        assert!(message.contains("cannot parse"), "{message}");
+        assert!(message.contains("package.json"), "{message}");
     }
 }

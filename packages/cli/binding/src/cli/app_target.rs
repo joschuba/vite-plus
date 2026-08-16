@@ -899,11 +899,12 @@ mod tests {
         let (dir, cwd) = doc_workspace("intercept");
         // Actions at a candidates root spawn the real binary.
         assert!(needs_elicitation(&doc_subcommand(&["build"]), &cwd));
-        // `init`, `info`, and unparsable arguments spawn it anywhere.
+        // `init`, `info`, and unparsable arguments spawn it anywhere. A
+        // leading option is not a parse error: it forwards to `dev`.
         let member = AbsolutePathBuf::new(dir.join("packages/docs")).unwrap();
         assert!(needs_elicitation(&doc_subcommand(&["init", "vitepress"]), &member));
         assert!(needs_elicitation(&doc_subcommand(&["info"]), &member));
-        assert!(needs_elicitation(&doc_subcommand(&["--bogus"]), &member));
+        assert!(needs_elicitation(&doc_subcommand(&["serve"]), &member));
         // An action inside the documentation package synthesizes (cached path).
         assert!(!needs_elicitation(&doc_subcommand(&["build"]), &member));
         std::fs::remove_dir_all(dir).unwrap();

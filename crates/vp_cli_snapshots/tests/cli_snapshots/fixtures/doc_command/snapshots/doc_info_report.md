@@ -15,18 +15,27 @@ Commands:  dev, build, preview
 
 ```
 {
+  "schemaVersion": 1,
+  "status": "ready",
   "provider": "starlight",
   "displayName": "Starlight",
   "source": {
-    "kind": "dependency-marker",
-    "marker": "@astrojs/starlight"
+    "kind": "dependency-marker"
   },
-  "target": "package-bin",
-  "tool": {
+  "marker": {
+    "package": "@astrojs/starlight",
+    "version": "0.41.7"
+  },
+  "execution": {
+    "kind": "package-bin",
     "package": "astro",
     "version": "7.2.2",
+    "bin": "astro"
+  },
+  "compatibility": {
+    "subject": "@astrojs/starlight",
     "supportedRange": ">=0.41.0",
-    "versionSupported": true
+    "supported": true
   },
   "commands": [
     "dev",

@@ -686,12 +686,13 @@ async fn execute_doc_info(
                 }
             }
             let target = provider.target.as_str();
-            match info.tool.version.as_deref() {
-                Some(version) => println!("Tool:      {}@{version} ({target})", info.tool.package),
-                None => println!("Tool:      {} (not installed) ({target})", info.tool.package),
+            let tool = info.execution_package();
+            match info.execution_version.as_deref() {
+                Some(version) => println!("Tool:      {tool}@{version} ({target})"),
+                None => println!("Tool:      {tool} (not installed) ({target})"),
             }
-            if info.tool.version.is_some() && !info.tool.version_supported {
-                match info.tool.supported_range {
+            if info.marker_version.is_some() && !info.supported {
+                match provider.version_range {
                     Some(range) => {
                         println!("Warning:   installed version is unsupported (requires `{range}`)")
                     }
@@ -702,17 +703,16 @@ async fn execute_doc_info(
                 provider.capabilities.iter().map(|action| action.as_str()).collect();
             println!("Commands:  {}", commands.join(", "));
         }
-        vp_doc_cli::DocInfoReport::Unresolved { candidates } => {
-            if candidates.is_empty() {
-                println!(
-                    "No documentation provider is configured. Run `vp doc init <provider>` to set one up."
-                );
-            } else {
-                println!(
-                    "Multiple documentation providers are declared: {}. Remove the markers you do not use, or set `doc.provider` in vite.config.ts.",
-                    candidates.join(", ")
-                );
-            }
+        vp_doc_cli::DocInfoReport::NoProvider => {
+            println!(
+                "No documentation provider is configured. Run `vp doc init <provider>` to set one up."
+            );
+        }
+        vp_doc_cli::DocInfoReport::MultipleProviders { candidates } => {
+            println!(
+                "Multiple documentation providers are declared: {}. Remove the markers you do not use, or set `doc.provider` in vite.config.ts.",
+                candidates.join(", ")
+            );
         }
     }
     Ok(if report.resolved() { ExitStatus::SUCCESS } else { ExitStatus(1) })

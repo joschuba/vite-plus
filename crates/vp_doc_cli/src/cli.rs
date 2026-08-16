@@ -57,9 +57,15 @@ pub fn parse_doc_args(args: &[String]) -> Result<DocInvocation, Error> {
         return Ok(DocInvocation::Action(DocRequest { action: DocAction::Dev, args: rest }));
     }
     if first.starts_with('-') {
-        return Err(user_message(format!(
-            "unexpected option `{first}` before the doc command\n\nPlace tool options after `dev`, `build`, or `preview`, or after `--`."
-        )));
+        // A leading option selects the default `dev` and forwards the
+        // complete argument sequence verbatim; `--` stays accepted as a
+        // conventional separator but nothing requires it
+        // (rfcs/doc-command.md, Command Interface). A lone `-h`/`--help`
+        // never reaches this parse: both CLI surfaces answer it first.
+        return Ok(DocInvocation::Action(DocRequest {
+            action: DocAction::Dev,
+            args: args.to_vec(),
+        }));
     }
     let action = match first {
         "dev" => DocAction::Dev,
@@ -147,9 +153,10 @@ mod tests {
     }
 
     #[test]
-    fn an_option_before_the_action_is_an_error() {
-        let message = parse_error(&["--host", "dev"]);
-        assert!(message.contains("unexpected option `--host`"), "{message}");
+    fn a_leading_option_selects_dev_and_forwards_everything() {
+        let request = action(&["--host", "0.0.0.0", "--port", "3000"]);
+        assert_eq!(request.action, DocAction::Dev);
+        assert_eq!(request.args, ["--host", "0.0.0.0", "--port", "3000"]);
     }
 
     #[test]

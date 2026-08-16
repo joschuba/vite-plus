@@ -287,18 +287,6 @@ impl SubcommandResolver {
                             anyhow::bail!("`vp doc info` runs directly, not inside `vp run`")
                         }
                     };
-                // Only `doc build` is a cacheable batch operation; the servers
-                // stay uncached like `dev`/`preview`.
-                let cache_config = if request.action.is_server() {
-                    UserCacheConfig::disabled()
-                } else {
-                    UserCacheConfig::with_config(EnabledCacheConfig {
-                        env: None,
-                        untracked_env: None,
-                        input: None,
-                        output: None,
-                    })
-                };
                 let context = load_doc_context(cwd.as_path(), self.cli_options.as_ref()).await?;
                 let execution = vp_doc_cli::resolve(&request, cwd.as_path(), context.as_ref())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -312,6 +300,31 @@ impl SubcommandResolver {
                         execution.provider.id, execution.provider.marker
                     );
                 }
+                if let Some(warning) = &execution.warning {
+                    eprintln!("warning: {warning}");
+                }
+                // Only `doc build` is a cacheable batch operation; the
+                // servers stay uncached like `dev`/`preview`. Filesystem
+                // tracing cannot observe environment reads, so the cache
+                // fingerprints the provider's declared environment patterns
+                // (rfcs/doc-command.md, Task Runner and Caching).
+                let cache_config = if request.action.is_server() {
+                    UserCacheConfig::disabled()
+                } else {
+                    UserCacheConfig::with_config(EnabledCacheConfig {
+                        env: Some(
+                            execution
+                                .provider
+                                .cache_env
+                                .iter()
+                                .map(|pattern| Str::from(*pattern))
+                                .collect(),
+                        ),
+                        untracked_env: None,
+                        input: None,
+                        output: None,
+                    })
+                };
 
                 match execution.resolution {
                     vp_doc_cli::DocResolution::PackageBin { bin_path, args } => {

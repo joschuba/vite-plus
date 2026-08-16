@@ -4,9 +4,9 @@
 use std::{fs, path::Path};
 
 use crate::{
-    detect::{detect_providers, find_nearest_manifest},
+    detect::{detect_providers, find_installed_package, find_nearest_manifest},
     error::{Error, user_message},
-    providers::{ProviderDefinition, init_providers},
+    providers::{ProviderDefinition, ProviderTarget, init_providers},
 };
 
 /// A starter file the scaffold visited: created when missing, kept when it
@@ -73,10 +73,15 @@ pub fn init_scaffold(provider_id: Option<&str>, cwd: &Path) -> Result<DocInitOut
     let init = provider.init.as_ref().expect("init_providers yields init-capable providers");
 
     let declared =
-        find_nearest_manifest(cwd).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
-    if declared.iter().any(|candidate| candidate.id == provider.id) {
+        find_nearest_manifest(cwd)?.map(|manifest| detect_providers(&manifest)).unwrap_or_default();
+    if declared.iter().any(|candidate| candidate.id == provider.id)
+        && provider_runnable(provider, cwd)
+    {
         return Ok(DocInitOutcome::AlreadyConfigured { provider });
     }
+    // A declared but not runnable provider is the residue of a failed
+    // install; fall through so the retry repairs it instead of reporting
+    // success (rfcs/doc-command.md, Initialization).
 
     let mut files = Vec::new();
     for file in init.starter_files {
@@ -95,6 +100,21 @@ pub fn init_scaffold(provider_id: Option<&str>, cwd: &Path) -> Result<DocInitOut
     Ok(DocInitOutcome::Scaffolded { provider, files, dependencies: init.dependencies })
 }
 
+/// Runnable means the marker package resolves, and a package-bin
+/// provider's executable package resolves too. Starter files are not
+/// required: a pre-existing project keeps its own content and config.
+fn provider_runnable(provider: &ProviderDefinition, cwd: &Path) -> bool {
+    if find_installed_package(provider.marker, cwd).is_none() {
+        return false;
+    }
+    match provider.target {
+        ProviderTarget::PackageBin { package_name, .. } => {
+            package_name == provider.marker || find_installed_package(package_name, cwd).is_some()
+        }
+        ProviderTarget::BuiltinVite => true,
+    }
+}
+
 /// Init step 3: write `doc` configuration to the effective root's Vite
 /// config only when detection alone would not select the provider, for
 /// example when another marker is already declared. Runs after the
@@ -108,7 +128,7 @@ pub fn write_doc_provider_config(
     cwd: &Path,
 ) -> Result<DocConfigWrite, Error> {
     let detected =
-        find_nearest_manifest(cwd).map(|manifest| detect_providers(&manifest)).unwrap_or_default();
+        find_nearest_manifest(cwd)?.map(|manifest| detect_providers(&manifest)).unwrap_or_default();
     if matches!(detected.as_slice(), [only] if only.id == provider.id) {
         return Ok(DocConfigWrite::NotNeeded);
     }
@@ -205,11 +225,24 @@ mod tests {
     }
 
     #[test]
-    fn second_init_reports_the_existing_setup() {
+    fn second_init_reports_the_existing_setup_only_when_runnable() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("package.json"),
             r#"{ "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
+        )
+        .unwrap();
+        // Declared but not installed: the residue of a failed install.
+        // The retry repairs it (scaffold plus reinstall) instead of
+        // reporting success (rfcs/doc-command.md, Initialization).
+        let outcome = init_scaffold(Some("vitepress"), dir.path()).unwrap();
+        assert!(matches!(outcome, DocInitOutcome::Scaffolded { .. }));
+
+        let package_root = dir.path().join("node_modules/vitepress");
+        fs::create_dir_all(&package_root).unwrap();
+        fs::write(
+            package_root.join("package.json"),
+            r#"{ "name": "vitepress", "version": "2.0.0-alpha.19", "bin": { "vitepress": "bin/vitepress.js" } }"#,
         )
         .unwrap();
         let outcome = init_scaffold(Some("vitepress"), dir.path()).unwrap();
@@ -217,7 +250,6 @@ mod tests {
             outcome,
             DocInitOutcome::AlreadyConfigured { provider } if provider.id == "vitepress"
         ));
-        assert!(!dir.path().join("index.md").exists());
     }
 
     #[test]

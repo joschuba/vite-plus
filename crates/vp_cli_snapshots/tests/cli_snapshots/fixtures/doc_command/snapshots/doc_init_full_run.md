@@ -8,7 +8,7 @@ scaffold and install from the mock registry
 
 ```
 Created index.md.
-Installing vitepress@next...
+Installing vitepress@>=2.0.0-alpha.18 <3.0.0...
 
 devDependencies:
  vitepress 2.0.0-alpha.19
