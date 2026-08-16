@@ -29,13 +29,9 @@ pub struct DocInfoResolved {
 }
 
 impl DocInfoResolved {
-    /// The executable package: the bin package for a package-bin target,
-    /// the marker itself for the built-in Vite target.
+    /// The executable package (see [`ProviderDefinition::execution_package`]).
     pub fn execution_package(&self) -> &'static str {
-        match self.provider.target {
-            ProviderTarget::PackageBin { package_name, .. } => package_name,
-            ProviderTarget::BuiltinVite => self.provider.marker,
-        }
+        self.provider.execution_package()
     }
 }
 
@@ -138,13 +134,15 @@ fn build_resolved(
         .as_ref()
         .and_then(|package| package.version())
         .map(str::to_string);
-    let supported = marker_version.as_deref().is_some_and(|version| {
+    // `supported` reports the version gate only. A missing installation is
+    // the null version, not a compatibility failure: the RFC contrasts the
+    // two states, and `supported: false` for an uninstalled no-range
+    // provider would read as a version problem no version caused
+    // (rfcs/doc-command.md, Selection reporting).
+    let supported = marker_version.as_deref().is_none_or(|version| {
         provider.version_range.is_none_or(|range| resolve::version_satisfies(version, range))
     });
-    let execution_package = match provider.target {
-        ProviderTarget::PackageBin { package_name, .. } => package_name,
-        ProviderTarget::BuiltinVite => provider.marker,
-    };
+    let execution_package = provider.execution_package();
     let execution_version = if execution_package == provider.marker {
         marker_version.clone()
     } else {
@@ -220,6 +218,29 @@ mod tests {
         assert_eq!(json["compatibility"]["subject"], "@astrojs/starlight");
         assert_eq!(json["compatibility"]["supported"], true);
         assert_eq!(json["commands"][0], "dev");
+    }
+
+    #[test]
+    fn a_missing_installation_is_a_null_version_not_a_version_failure() {
+        // Declared but not installed: the report stays `ready` with a null
+        // version, and `supported` does not claim a version problem
+        // (rfcs/doc-command.md, Selection reporting).
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "@ox-content/vite-plugin": "^1.1.0" } }"#,
+        )
+        .unwrap();
+        let report = info_report(dir.path(), None).unwrap();
+        let DocInfoReport::Resolved(info) = &report else {
+            panic!("expected a resolved report");
+        };
+        assert!(info.marker_version.is_none());
+        assert!(info.supported);
+        let json = report.to_json();
+        assert_eq!(json["status"], "ready");
+        assert_eq!(json["marker"]["version"], serde_json::Value::Null);
+        assert_eq!(json["compatibility"]["supported"], true);
     }
 
     #[test]

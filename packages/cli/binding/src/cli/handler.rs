@@ -98,8 +98,10 @@ impl CommandHandler for VitePlusCommandHandler {
                 if super::app_target::needs_elicitation(&subcmd, &command.cwd) {
                     return Ok(HandledCommand::Verbatim);
                 }
+                // Plan-time resolution: announce=false keeps the doc arm's
+                // marker line out of every `vp run`, cache hits included.
                 let resolved =
-                    self.resolver.resolve(subcmd, None, &command.envs, &command.cwd).await?;
+                    self.resolver.resolve(subcmd, None, &command.envs, &command.cwd, false).await?;
                 Ok(HandledCommand::Synthesized(resolved.into_synthetic_plan_request()))
             }
             CLIArgs::ViteTask(cmd) => Ok(HandledCommand::ViteTaskCommand(cmd)),

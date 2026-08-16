@@ -394,7 +394,11 @@ pub async fn main(
                 match dispatch_doc(args, &cwd, options.as_ref()).await? {
                     Some(DocDispatch::Done(status)) => return Ok(status),
                     Some(DocDispatch::Run { cwd: doc_cwd, retargeted }) => {
-                        script_note::print(raw_subcommand.as_deref(), &doc_cwd);
+                        // The shadow-script note reads the invocation
+                        // directory, like the app commands: the user typed
+                        // the command here, so the script that could shadow
+                        // it lives here, not in the redirect target.
+                        script_note::print(raw_subcommand.as_deref(), &cwd);
                         return execute_direct_subcommand(subcmd, &doc_cwd, options, retargeted)
                             .await;
                     }
@@ -441,16 +445,28 @@ async fn dispatch_doc(
         return Ok(None);
     };
     let command = match &invocation {
-        vp_doc_cli::DocInvocation::Action(request) => match request.action {
-            vp_doc_cli::DocAction::Dev => "doc",
-            vp_doc_cli::DocAction::Build => "doc build",
-            vp_doc_cli::DocAction::Preview => "doc preview",
-        },
-        vp_doc_cli::DocInvocation::Init { .. } => "doc init",
-        vp_doc_cli::DocInvocation::Info { .. } => "doc info",
+        vp_doc_cli::DocInvocation::Action(request) => {
+            let mut command = match request.action {
+                vp_doc_cli::DocAction::Dev => "doc".to_string(),
+                vp_doc_cli::DocAction::Build => "doc build".to_string(),
+                vp_doc_cli::DocAction::Preview => "doc preview".to_string(),
+            };
+            // The listing and the picker tip advertise ready-to-run
+            // commands, so the forwarded tool arguments ride along.
+            for arg in &request.args {
+                command.push(' ');
+                command.push_str(arg);
+            }
+            command
+        }
+        vp_doc_cli::DocInvocation::Init { .. } => "doc init".to_string(),
+        vp_doc_cli::DocInvocation::Info { .. } => "doc info".to_string(),
     };
     let elicit = matches!(invocation, vp_doc_cli::DocInvocation::Action(_));
-    let target = app_target::resolve_doc_target(cwd, command, elicit)?;
+    // `info --json` keeps its diagnostics notice-free (rfcs/doc-command.md,
+    // Delegation and Process Behavior).
+    let quiet_redirect = matches!(invocation, vp_doc_cli::DocInvocation::Info { json: true });
+    let target = app_target::resolve_doc_target(cwd, &command, elicit, quiet_redirect)?;
     let retargeted = matches!(&target, app_target::AppTarget::Dir(_));
     let cwd = match target {
         app_target::AppTarget::Exit(status) => return Ok(Some(DocDispatch::Done(status))),
@@ -475,12 +491,12 @@ async fn dispatch_doc(
     Ok(Some(DocDispatch::Done(status)))
 }
 
-/// Render a `vp_doc_cli` error: user messages print behind the `error:`
-/// prefix and exit 1; anything else propagates.
+/// Render a `vp_doc_cli` error: user messages print behind the shared
+/// `error:` prefix and exit 1; anything else propagates.
 fn render_doc_error(error: vp_doc_cli::Error) -> Result<ExitStatus, Error> {
     match error {
         vp_doc_cli::Error::UserMessage(message) => {
-            eprintln!("error: {message}");
+            vp_shared::output::error(&message);
             Ok(ExitStatus(1))
         }
         other => Err(Error::Anyhow(anyhow::Error::new(other))),
@@ -550,14 +566,13 @@ async fn offer_doc_init_for_action(
     Ok(None)
 }
 
-/// Render a doc-context load failure: user messages print and exit 1, other
-/// errors propagate.
+/// Render a doc-context load failure through [`render_doc_error`]: user
+/// messages print and exit 1, other errors propagate.
 fn doc_context_error(error: anyhow::Error) -> Result<ExitStatus, Error> {
-    if let Some(vp_doc_cli::Error::UserMessage(message)) = error.downcast_ref() {
-        eprintln!("error: {message}");
-        return Ok(ExitStatus(1));
+    match error.downcast::<vp_doc_cli::Error>() {
+        Ok(doc_error) => render_doc_error(doc_error),
+        Err(error) => Err(Error::Anyhow(error)),
     }
-    Err(Error::Anyhow(error))
 }
 
 /// Execute `vp doc init`: scaffold through `vp_doc_cli`, then install the
@@ -615,7 +630,7 @@ async fn execute_doc_init(
             };
             let status = execute_pm_command(add, cwd, options).await?;
             if status.0 != 0 {
-                eprintln!("error: failed to install {}", dependencies.join(", "));
+                vp_shared::output::error(&format!("failed to install {}", dependencies.join(", ")));
                 return Ok(status);
             }
 
@@ -631,12 +646,24 @@ async fn execute_doc_init(
                     println!("Set `doc.provider: '{}'` in {file}.", provider.id);
                 }
                 Ok(vp_doc_cli::DocConfigWrite::Manual { file }) => {
-                    println!(
-                        "Another provider is declared. Set `doc.provider: '{}'` in {file} to select {}.",
+                    // The selection stays unresolved until the manual edit,
+                    // so init must not report success
+                    // (rfcs/doc-command.md, Initialization: "init exits
+                    // nonzero until the selected provider can run").
+                    return render_doc_error(vp_doc_cli::Error::UserMessage(format!(
+                        "set `doc.provider: '{}'` in {file} to select {}; the existing config was left unedited",
                         provider.id, provider.display_name
-                    );
+                    )));
                 }
                 Err(error) => return render_doc_error(error),
+            }
+
+            // The scaffold covers a fresh setup only: it never edits an
+            // existing tool config, so a still-missing registration must
+            // fail here instead of printing a ready line the next
+            // `vp doc` contradicts.
+            if let Err(error) = vp_doc_cli::validate_native_config(provider, cwd.as_path(), false) {
+                return render_doc_error(error);
             }
 
             if print_next_step {

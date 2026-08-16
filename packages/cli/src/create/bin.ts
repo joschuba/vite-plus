@@ -461,6 +461,21 @@ async function main() {
   }
   // #endregion
 
+  // Validate the `--doc` provider before any prompt. `--doc` takes an
+  // optional value, so a bare `--doc` placed before the template consumes
+  // the template name as its value (`vp create --doc vite:monorepo`); the
+  // early error names the fix instead of prompting for a template first.
+  if (typeof options.doc === 'string' && options.doc !== 'vitepress') {
+    const hint =
+      options.doc.includes(':') || options.doc.includes('/')
+        ? ` (\`${options.doc}\` looks like a template; place it before \`--doc\`)`
+        : '';
+    cancelAndExit(
+      `Unsupported documentation provider \`${options.doc}\` (supported: vitepress)${hint}`,
+      1,
+    );
+  }
+
   // #region Prepare Stage
   if (options.interactive) {
     prompts.intro(vitePlusHeader());
@@ -899,14 +914,9 @@ Use \`vp create --list\` to list all available templates, or run \`vp create --h
   // Documentation package for the monorepo template (rfcs/doc-command.md,
   // New Projects). Bundled org monorepos define their own layout, so the
   // option only applies to `vite:monorepo`.
+  // The provider value was validated before any prompt ran.
   let includeDocPackage = false;
   if (selectedTemplateName === BuiltinTemplate.monorepo && !isBundledMonorepo) {
-    if (typeof options.doc === 'string' && options.doc !== 'vitepress') {
-      cancelAndExit(
-        `Unsupported documentation provider \`${options.doc}\` (supported: vitepress)`,
-        1,
-      );
-    }
     includeDocPackage = await promptDocPackage(options);
   }
 

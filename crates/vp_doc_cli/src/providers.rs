@@ -83,6 +83,17 @@ pub struct ProviderDefinition {
     pub init: Option<ProviderInit>,
 }
 
+impl ProviderDefinition {
+    /// The executable package: the bin package for a package-bin target,
+    /// the marker itself for the built-in Vite target.
+    pub fn execution_package(&self) -> &'static str {
+        match self.target {
+            ProviderTarget::PackageBin { package_name, .. } => package_name,
+            ProviderTarget::BuiltinVite => self.marker,
+        }
+    }
+}
+
 pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
     ProviderDefinition {
         id: "vitepress",
@@ -115,7 +126,8 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
     },
     ProviderDefinition {
         // Vocs 1 pins Vite 7; Vocs 2 is the first line that declares a
-        // `vite: ^8` peer. Init support is not planned (rfcs/doc-command.md).
+        // `vite: ^8` peer. Init support is deferred to the post-exposure
+        // rollout step (rfcs/doc-command.md, Rollout).
         id: "vocs",
         display_name: "Vocs",
         marker: "vocs",

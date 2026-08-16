@@ -17,7 +17,7 @@ The built-in providers are:
 | `starlight`  | [Starlight](https://github.com/withastro/starlight)           | `@astrojs/starlight`      | the `astro` bin             |
 | `ox-content` | [Ox Content](https://github.com/ubugeeei-prod/ox-content)     | `@ox-content/vite-plugin` | Vite+'s built-in Vite command |
 
-Vite+ bundles Vite 8, so each provider supports the tool releases that run on Vite 8: VitePress `>=2.0.0-alpha.18`, Vocs `>=2.0.0`, and Starlight `>=0.41.0`. Every published Ox Content release targets Vite 8. A release below the floor fails before the tool runs; a newer release above the known range prints a warning and runs.
+Vite+ bundles Vite 8, so each provider supports the tool releases that run on Vite 8: VitePress `>=2.0.0-alpha.18`, Vocs `>=2.0.0`, and Starlight `>=0.41.0`. Every published Ox Content release targets Vite 8. A release below the floor fails before the tool runs; a release outside the known range but at or above the floor prints a warning and runs.
 
 A marker alone does not prove an integration is active. Ox Content requires the plugin registered in `vite.config.ts`, and Starlight requires an Astro config file; `vp doc` checks both before it runs and prints the one-line fix.
 

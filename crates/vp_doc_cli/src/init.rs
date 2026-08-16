@@ -4,9 +4,13 @@
 use std::{fs, path::Path};
 
 use crate::{
-    detect::{detect_providers, find_installed_package, find_nearest_manifest},
+    config::{StaticDocConfig, load_static_doc_config},
+    detect::{
+        detect_providers, find_installed_package, find_nearest_manifest, marker_declared_any_field,
+    },
     error::{Error, user_message},
     providers::{ProviderDefinition, ProviderTarget, init_providers},
+    resolve::{VersionGate, assess_version, validate_native_config},
 };
 
 /// A starter file the scaffold visited: created when missing, kept when it
@@ -72,16 +76,29 @@ pub fn init_scaffold(provider_id: Option<&str>, cwd: &Path) -> Result<DocInitOut
     };
     let init = provider.init.as_ref().expect("init_providers yields init-capable providers");
 
-    let declared =
-        find_nearest_manifest(cwd)?.map(|manifest| detect_providers(&manifest)).unwrap_or_default();
-    if declared.iter().any(|candidate| candidate.id == provider.id)
-        && provider_runnable(provider, cwd)
-    {
+    // Already set up means the next `vp doc` would actually run this
+    // provider: selection resolves to it (a unique detected marker, or a
+    // declared marker plus a `doc.provider` that names it), its packages
+    // resolve inside a supported version, and its native config validates
+    // (rfcs/doc-command.md, Initialization: "init exits nonzero until the
+    // selected provider can run"). Anything less falls through so the
+    // retry repairs the setup instead of reporting success: a failed
+    // install's residue, a deleted native config file, or a second marker
+    // whose tiebreaker step 3 writes.
+    let manifest = find_nearest_manifest(cwd)?;
+    let declared = manifest.as_ref().map(|manifest| detect_providers(manifest)).unwrap_or_default();
+    let unique_marker = matches!(declared.as_slice(), [only] if only.id == provider.id);
+    let config_selects = manifest
+        .as_ref()
+        .is_some_and(|manifest| marker_declared_any_field(manifest, provider.marker))
+        && matches!(
+            load_static_doc_config(cwd),
+            Ok(StaticDocConfig::Resolved(context))
+                if context.config.provider.as_deref() == Some(provider.id)
+        );
+    if (unique_marker || config_selects) && provider_runnable(provider, cwd) {
         return Ok(DocInitOutcome::AlreadyConfigured { provider });
     }
-    // A declared but not runnable provider is the residue of a failed
-    // install; fall through so the retry repairs it instead of reporting
-    // success (rfcs/doc-command.md, Initialization).
 
     let mut files = Vec::new();
     for file in init.starter_files {
@@ -100,19 +117,25 @@ pub fn init_scaffold(provider_id: Option<&str>, cwd: &Path) -> Result<DocInitOut
     Ok(DocInitOutcome::Scaffolded { provider, files, dependencies: init.dependencies })
 }
 
-/// Runnable means the marker package resolves, and a package-bin
-/// provider's executable package resolves too. Starter files are not
-/// required: a pre-existing project keeps its own content and config.
+/// Runnable means the marker package resolves inside a supported version
+/// (an outside-range version only warns at run time, so it still counts),
+/// a package-bin provider's executable package resolves too, and the
+/// native config validates. Starter files are not required: a pre-existing
+/// project keeps its own content and config.
 fn provider_runnable(provider: &ProviderDefinition, cwd: &Path) -> bool {
-    if find_installed_package(provider.marker, cwd).is_none() {
+    let Some(marker) = find_installed_package(provider.marker, cwd) else {
+        return false;
+    };
+    if matches!(assess_version(provider, marker.version()), VersionGate::BelowFloor { .. }) {
         return false;
     }
-    match provider.target {
+    let executable_resolves = match provider.target {
         ProviderTarget::PackageBin { package_name, .. } => {
             package_name == provider.marker || find_installed_package(package_name, cwd).is_some()
         }
         ProviderTarget::BuiltinVite => true,
-    }
+    };
+    executable_resolves && validate_native_config(provider, cwd, false).is_ok()
 }
 
 /// Init step 3: write `doc` configuration to the effective root's Vite
@@ -127,6 +150,16 @@ pub fn write_doc_provider_config(
     provider: &ProviderDefinition,
     cwd: &Path,
 ) -> Result<DocConfigWrite, Error> {
+    // A config that already selects this provider needs no write; without
+    // this check the has-`doc`-key guard below would report Manual for a
+    // setup that already runs.
+    if matches!(
+        load_static_doc_config(cwd),
+        Ok(StaticDocConfig::Resolved(context))
+            if context.config.provider.as_deref() == Some(provider.id)
+    ) {
+        return Ok(DocConfigWrite::NotNeeded);
+    }
     let detected =
         find_nearest_manifest(cwd)?.map(|manifest| detect_providers(&manifest)).unwrap_or_default();
     if matches!(detected.as_slice(), [only] if only.id == provider.id) {
@@ -157,7 +190,14 @@ pub fn write_doc_provider_config(
         Ok(true) | Err(_) => return Ok(DocConfigWrite::Manual { file }),
     }
     for opening in ["export default defineConfig({", "export default {"] {
-        if let Some(index) = contents.find(opening) {
+        // Anchor the match at a line start: a comment or string mentioning
+        // the opening (for example a commented-out old config) must not
+        // become the splice point.
+        let index = contents
+            .match_indices(opening)
+            .map(|(index, _)| index)
+            .find(|&index| index == 0 || contents.as_bytes()[index - 1] == b'\n');
+        if let Some(index) = index {
             let insert_at = index + opening.len();
             let mut updated = String::with_capacity(contents.len() + entry.len() + 4);
             updated.push_str(&contents[..insert_at]);
@@ -250,6 +290,116 @@ mod tests {
             outcome,
             DocInitOutcome::AlreadyConfigured { provider } if provider.id == "vitepress"
         ));
+    }
+
+    fn install_runnable_starlight(dir: &Path) {
+        for (name, manifest) in [
+            ("@astrojs/starlight", r#"{ "name": "@astrojs/starlight", "version": "0.41.7" }"#),
+            ("astro", r#"{ "name": "astro", "version": "7.2.2", "bin": { "astro": "astro.js" } }"#),
+        ] {
+            let mut package_root = dir.join("node_modules");
+            for segment in name.split('/') {
+                package_root.push(segment);
+            }
+            fs::create_dir_all(&package_root).unwrap();
+            fs::write(package_root.join("package.json"), manifest).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_second_marker_falls_through_to_the_tiebreaker() {
+        // With two markers declared, `vp doc` fails until step 3 writes
+        // `doc.provider`; "already set up" would skip exactly that write.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "@astrojs/starlight": "^0.41.0" } }"#,
+        )
+        .unwrap();
+        install_runnable_starlight(dir.path());
+        fs::write(dir.path().join("astro.config.mjs"), "// astro config\n").unwrap();
+        let outcome = init_scaffold(Some("starlight"), dir.path()).unwrap();
+        assert!(matches!(outcome, DocInitOutcome::Scaffolded { .. }));
+    }
+
+    #[test]
+    fn a_config_selected_provider_reports_already_set_up() {
+        // The migration shape: two markers, `doc.provider` already names
+        // the survivor. The setup runs, so init reports it as set up.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "@astrojs/starlight": "^0.41.0" } }"#,
+        )
+        .unwrap();
+        install_runnable_starlight(dir.path());
+        fs::write(dir.path().join("astro.config.mjs"), "// astro config\n").unwrap();
+        fs::write(
+            dir.path().join("vite.config.ts"),
+            "export default { doc: { provider: 'starlight' } };\n",
+        )
+        .unwrap();
+        let outcome = init_scaffold(Some("starlight"), dir.path()).unwrap();
+        assert!(matches!(
+            outcome,
+            DocInitOutcome::AlreadyConfigured { provider } if provider.id == "starlight"
+        ));
+    }
+
+    #[test]
+    fn a_missing_native_config_falls_through_for_repair() {
+        // Declared and installed, but the Astro config file was deleted:
+        // "already set up" would loop with the runtime error's init hint,
+        // while falling through recreates the missing starter.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "@astrojs/starlight": "^0.41.0" } }"#,
+        )
+        .unwrap();
+        install_runnable_starlight(dir.path());
+        let outcome = init_scaffold(Some("starlight"), dir.path()).unwrap();
+        assert!(matches!(outcome, DocInitOutcome::Scaffolded { .. }));
+        assert!(dir.path().join("astro.config.mjs").is_file());
+    }
+
+    #[test]
+    fn a_below_floor_version_falls_through_for_repair() {
+        // A declared VitePress 1 install: `vp doc` hard-fails it, so init
+        // must reinstall through the pinned range instead of reporting
+        // success.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^1.0.0" } }"#,
+        )
+        .unwrap();
+        let package_root = dir.path().join("node_modules/vitepress");
+        fs::create_dir_all(&package_root).unwrap();
+        fs::write(
+            package_root.join("package.json"),
+            r#"{ "name": "vitepress", "version": "1.6.4", "bin": { "vitepress": "bin/vitepress.js" } }"#,
+        )
+        .unwrap();
+        let outcome = init_scaffold(Some("vitepress"), dir.path()).unwrap();
+        assert!(matches!(outcome, DocInitOutcome::Scaffolded { .. }));
+    }
+
+    #[test]
+    fn config_write_is_not_needed_when_config_already_selects() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        let original = "export default {\n  doc: {\n    provider: 'vocs',\n  },\n};\n";
+        fs::write(dir.path().join("vite.config.ts"), original).unwrap();
+        let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
+        // The config already selects the provider; Manual here would fail
+        // a setup that runs.
+        assert_eq!(write, DocConfigWrite::NotNeeded);
+        assert_eq!(fs::read_to_string(dir.path().join("vite.config.ts")).unwrap(), original);
     }
 
     #[test]
@@ -354,6 +504,31 @@ mod tests {
         let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
         assert_eq!(write, DocConfigWrite::Manual { file: "vite.config.ts".to_string() });
         assert_eq!(fs::read_to_string(dir.path().join("vite.config.ts")).unwrap(), original);
+    }
+
+    #[test]
+    fn config_write_ignores_an_opening_inside_a_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "devDependencies": { "vitepress": "^2.0.0-0", "vocs": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("vite.config.ts"),
+            "// migrated from: export default defineConfig({ run: {} })\nexport default {\n};\n",
+        )
+        .unwrap();
+        let write = write_doc_provider_config(provider("vocs"), dir.path()).unwrap();
+        assert_eq!(write, DocConfigWrite::Updated { file: "vite.config.ts".to_string() });
+        let contents = fs::read_to_string(dir.path().join("vite.config.ts")).unwrap();
+        // The splice targets the real export, not the commented occurrence.
+        assert!(
+            contents.starts_with(
+                "// migrated from: export default defineConfig({ run: {} })\nexport default {\n  doc: {"
+            ),
+            "{contents}"
+        );
     }
 
     #[test]

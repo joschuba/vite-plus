@@ -205,11 +205,15 @@ fn member_looks_runnable(dir: &AbsolutePath, command: &str) -> bool {
 /// Resolve the `defaultPackage` value [`classify`] extracted from the
 /// invocation root's `vite.config.*` (static extraction, so it works at
 /// roots without a vite-plus install). The value must be a static string
-/// literal naming an existing directory.
+/// literal naming an existing directory. `announce` gates only the success
+/// note; `vp doc info --json` keeps its diagnostics notice-free
+/// (rfcs/doc-command.md, Delegation and Process Behavior), while errors
+/// always print.
 fn resolve_default_package(
     command: &str,
     cwd: &AbsolutePath,
     value: vp_static_config::FieldValue,
+    announce: bool,
 ) -> AppTarget {
     let fail = |msg: &str| {
         output::error(msg);
@@ -221,7 +225,11 @@ fn resolve_default_package(
             if !target.as_path().is_dir() {
                 return fail(&format!("defaultPackage points to a missing directory: {dir}"));
             }
-            output::note(&format!("vp {command}: using {dir} (defaultPackage in vite.config.ts)"));
+            if announce {
+                output::note(&format!(
+                    "vp {command}: using {dir} (defaultPackage in vite.config.ts)"
+                ));
+            }
             AppTarget::Dir(target)
         }
         vp_static_config::FieldValue::Json(other) => {
@@ -254,19 +262,22 @@ enum DocClassification {
     Elicit(Vec<DocCandidateRow>),
 }
 
-/// Classify a `vp doc` invocation directory. Pure: never prints.
-fn classify_doc(cwd: &AbsolutePath) -> Result<DocClassification, Error> {
+/// Classify a `vp doc` invocation directory. Pure: never prints. `elicit`
+/// is false for `init`/`info`, which run at the settled directory; the
+/// candidate scan (the expensive package-graph load) is skipped for them.
+fn classify_doc(cwd: &AbsolutePath, elicit: bool) -> Result<DocClassification, Error> {
     let workspace = vt_workspace::find_workspace_root(cwd);
     let at_invocation_root =
         workspace.as_ref().map_or(true, |(_, rel_from_root)| rel_from_root.as_str().is_empty());
     if !at_invocation_root {
         return Ok(DocClassification::RunInPlace);
     }
+    let static_config = vp_static_config::resolve_static_config(cwd);
     // The `doc` entry of `defaultPackage` redirects every doc subcommand.
     // Only the object form carries it: the string form covers the app
     // commands and never `doc`. Any other declared shape passes through so
     // the redirect reports it loudly, like the app commands.
-    match vp_static_config::resolve_static_config(cwd).get_declared("defaultPackage") {
+    match static_config.get_declared("defaultPackage") {
         Some(vp_static_config::FieldValue::Json(serde_json::Value::Object(map))) => {
             if let Some(value) = map.get("doc") {
                 return Ok(DocClassification::Redirect(vp_static_config::FieldValue::Json(
@@ -276,6 +287,9 @@ fn classify_doc(cwd: &AbsolutePath) -> Result<DocClassification, Error> {
         }
         Some(vp_static_config::FieldValue::Json(serde_json::Value::String(_))) | None => {}
         Some(invalid) => return Ok(DocClassification::Redirect(invalid)),
+    }
+    if !elicit {
+        return Ok(DocClassification::RunInPlace);
     }
     // The workspace documentation-package elicitation (rfcs/doc-command.md,
     // Monorepos). Anything unresolvable keeps today's behavior.
@@ -289,6 +303,22 @@ fn classify_doc(cwd: &AbsolutePath) -> Result<DocClassification, Error> {
     // documentation site (the root-VitePress layout); detection handles it.
     if !vp_doc_cli::detect_providers_in_dir(workspace_root.path.as_path()).is_empty() {
         return Ok(DocClassification::RunInPlace);
+    }
+    // A root config whose `doc` block names a provider is a root site too:
+    // explicit selection accepts a peer-declared marker, so no detected
+    // root marker is needed. A declared non-static `doc` field also runs
+    // in place and lets the resolver load it. A provider-less `doc` block
+    // decides nothing and falls through to the candidate scan.
+    match static_config.get_declared("doc") {
+        Some(vp_static_config::FieldValue::Json(serde_json::Value::Object(map)))
+            if map.contains_key("provider") =>
+        {
+            return Ok(DocClassification::RunInPlace);
+        }
+        Some(vp_static_config::FieldValue::NonStatic) => {
+            return Ok(DocClassification::RunInPlace);
+        }
+        _ => {}
     }
     let graph =
         vt_workspace::load_package_graph(&workspace_root).map_err(|e| Error::Anyhow(e.into()))?;
@@ -325,15 +355,20 @@ fn classify_doc(cwd: &AbsolutePath) -> Result<DocClassification, Error> {
 /// `defaultPackage` `doc` entry behaves as an implicit `-C` for every doc
 /// subcommand; the documentation-package picker/listing applies to the
 /// actions only (`elicit` is false for `init`/`info`). `command` is the
-/// invocation to echo in hints (`doc`, `doc build`, `doc preview`).
+/// invocation to echo in hints (`doc`, `doc build --host`, ...).
+/// `quiet_redirect` drops the redirect success note for `vp doc info
+/// --json`; redirect errors always print.
 pub(super) fn resolve_doc_target(
     cwd: &AbsolutePath,
     command: &str,
     elicit: bool,
+    quiet_redirect: bool,
 ) -> Result<AppTarget, Error> {
-    match classify_doc(cwd)? {
+    match classify_doc(cwd, elicit)? {
         DocClassification::RunInPlace => Ok(AppTarget::CurrentDir),
-        DocClassification::Redirect(value) => Ok(resolve_default_package("doc", cwd, value)),
+        DocClassification::Redirect(value) => {
+            Ok(resolve_default_package("doc", cwd, value, !quiet_redirect))
+        }
         DocClassification::Elicit(_) if !elicit => Ok(AppTarget::CurrentDir),
         DocClassification::Elicit(rows) => elicit_doc_package(&rows, command),
     }
@@ -372,7 +407,9 @@ fn elicit_doc_package(rows: &[DocCandidateRow], command: &str) -> Result<AppTarg
     output::raw_stderr("");
     let invocations: Vec<String> =
         rows.iter().map(|row| format!("vp -C {} {command}", row.path)).collect();
-    let width = invocations.iter().map(String::len).max().unwrap_or(0);
+    // Character count, not byte length: formatting width pads in
+    // characters, and a byte width over-pads rows with non-ASCII paths.
+    let width = invocations.iter().map(|invocation| invocation.chars().count()).max().unwrap_or(0);
     for (invocation, row) in invocations.iter().zip(rows) {
         output::raw_stderr(&format!("  {invocation:<width$}  ({})", row.providers));
     }
@@ -452,7 +489,7 @@ fn announce_selection(name: &str, path: &str, command: &str) {
 /// production), so the sequence is written by hand. A fresh random id per
 /// emission keeps repeated milestones with the same name observable as
 /// distinct title changes through Windows ConPTY.
-pub(super) fn emit_milestone_title(name: &str) {
+fn emit_milestone_title(name: &str) {
     use std::io::Write as _;
     let id = uuid::Uuid::new_v4();
     let encoded_name = base64_simd::URL_SAFE_NO_PAD.encode_to_string(name.as_bytes());
@@ -467,8 +504,8 @@ pub(super) fn emit_milestone_title(name: &str) {
 /// which case the script merely spawns the real binary, which then behaves
 /// identically to a direct invocation.
 pub(super) fn needs_elicitation(subcommand: &SynthesizableSubcommand, cwd: &AbsolutePath) -> bool {
-    // Doc scripts: only `dev`, `build`, and `preview` synthesize — `init`,
-    // `info`, and parse errors spawn the real binary — and the
+    // Doc scripts: only `dev`, `build`, and `preview` synthesize, while
+    // `init`, `info`, and parse errors spawn the real binary, and the
     // `defaultPackage` `doc` redirect or the documentation-package
     // elicitation spawns it too (rfcs/doc-command.md, Task Runner and
     // Caching). A classification error counts as no elicitation; the
@@ -478,7 +515,7 @@ pub(super) fn needs_elicitation(subcommand: &SynthesizableSubcommand, cwd: &Abso
             vp_doc_cli::parse_doc_args(args),
             Ok(vp_doc_cli::DocInvocation::Action(_))
         ) || matches!(
-            classify_doc(cwd),
+            classify_doc(cwd, true),
             Ok(DocClassification::Redirect(_) | DocClassification::Elicit(_))
         );
     }
@@ -622,7 +659,7 @@ pub(super) fn resolve_app_target(
     };
     let workspace_root = match elicitation {
         Elicitation::DefaultPackage(value) => {
-            return Ok((resolve_default_package(command, cwd, value), None));
+            return Ok((resolve_default_package(command, cwd, value, true), None));
         }
         Elicitation::WorkspaceRoot(workspace_root) => workspace_root,
     };
@@ -796,9 +833,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("packages/docs")).unwrap();
         std::fs::write(dir.join("packages/docs/package.json"), r#"{ "name": "docs" }"#).unwrap();
 
-        // `init` and `info` follow the redirect too (`elicit` false).
-        for (command, elicit) in [("doc build", true), ("doc init", false), ("doc info", false)] {
-            let target = resolve_doc_target(&cwd, command, elicit).unwrap();
+        // `init` and `info` follow the redirect too (`elicit` false), and
+        // the quiet form used by `info --json` still redirects.
+        for (command, elicit, quiet) in
+            [("doc build", true, false), ("doc init", false, false), ("doc info", false, true)]
+        {
+            let target = resolve_doc_target(&cwd, command, elicit, quiet).unwrap();
             let AppTarget::Dir(target) = target else {
                 panic!("expected a redirect for `{command}`");
             };
@@ -817,7 +857,7 @@ mod tests {
         )
         .unwrap();
         // The string form covers the app commands only, never `doc`.
-        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        let target = resolve_doc_target(&cwd, "doc build", true, false).unwrap();
         assert!(matches!(target, AppTarget::CurrentDir));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -829,7 +869,7 @@ mod tests {
         std::fs::write(dir.join("vite.config.ts"), "export default {\n  defaultPackage: 42,\n};\n")
             .unwrap();
         // An invalid shape errors loudly instead of being ignored.
-        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        let target = resolve_doc_target(&cwd, "doc build", true, false).unwrap();
         assert!(matches!(target, AppTarget::Exit(ExitStatus(1))));
 
         std::fs::write(
@@ -837,8 +877,9 @@ mod tests {
             "export default {\n  defaultPackage: pick(),\n};\n",
         )
         .unwrap();
-        // A declared but non-static value fails the same way.
-        let target = resolve_doc_target(&cwd, "doc build", true).unwrap();
+        // A declared but non-static value fails the same way, even for the
+        // quiet `info --json` form: only the success note is suppressed.
+        let target = resolve_doc_target(&cwd, "doc build", true, true).unwrap();
         assert!(matches!(target, AppTarget::Exit(ExitStatus(1))));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -869,7 +910,7 @@ mod tests {
     #[test]
     fn doc_classification_elicits_marker_members_at_a_workspace_root() {
         let (dir, cwd) = doc_workspace("elicit");
-        let DocClassification::Elicit(rows) = classify_doc(&cwd).unwrap() else {
+        let DocClassification::Elicit(rows) = classify_doc(&cwd, true).unwrap() else {
             panic!("expected candidates");
         };
         // Only marker-declaring members, sorted by path.
@@ -880,9 +921,26 @@ mod tests {
         assert_eq!(rows[0].providers, "starlight");
         assert_eq!(rows[1].providers, "vitepress");
 
+        // `init` and `info` never elicit, so their classification skips
+        // the candidate scan and runs in place.
+        assert!(matches!(classify_doc(&cwd, false).unwrap(), DocClassification::RunInPlace));
+
         // A member directory never elicits: detection stays local.
         let member = AbsolutePathBuf::new(dir.join("packages/docs")).unwrap();
-        assert!(matches!(classify_doc(&member).unwrap(), DocClassification::RunInPlace));
+        assert!(matches!(classify_doc(&member, true).unwrap(), DocClassification::RunInPlace));
+
+        // A root config whose `doc` block names a provider is a root site:
+        // explicit selection accepts a peer-declared marker, so the picker
+        // must not shadow it. A provider-less block decides nothing.
+        std::fs::write(dir.join("vite.config.ts"), "export default {\n  doc: {},\n};\n").unwrap();
+        assert!(matches!(classify_doc(&cwd, true).unwrap(), DocClassification::Elicit(_)));
+        std::fs::write(
+            dir.join("vite.config.ts"),
+            "export default {\n  doc: {\n    provider: 'vitepress',\n  },\n};\n",
+        )
+        .unwrap();
+        assert!(matches!(classify_doc(&cwd, true).unwrap(), DocClassification::RunInPlace));
+        std::fs::remove_file(dir.join("vite.config.ts")).unwrap();
 
         // A root that declares its own marker is its own documentation site.
         std::fs::write(
@@ -890,7 +948,7 @@ mod tests {
             r#"{ "name": "root", "devDependencies": { "vitepress": "^2.0.0-0" } }"#,
         )
         .unwrap();
-        assert!(matches!(classify_doc(&cwd).unwrap(), DocClassification::RunInPlace));
+        assert!(matches!(classify_doc(&cwd, true).unwrap(), DocClassification::RunInPlace));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

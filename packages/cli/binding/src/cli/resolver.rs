@@ -64,14 +64,19 @@ impl SubcommandResolver {
     /// Resolve a synthesizable subcommand to a concrete program, args, cache
     /// config, and envs. `cwd` is the execution directory the caller settled
     /// on (after `-C` and elicitation); the doc arm anchors detection there.
+    /// `announce` gates the doc arm's marker-selection line: the direct
+    /// path passes true, while script synthesis passes false because it
+    /// resolves at plan time on every `vp run`, cache hits included, where
+    /// the line would print with nothing running (warnings still print).
     pub(super) async fn resolve(
         &self,
         subcommand: SynthesizableSubcommand,
         resolved_vite_config: Option<&ResolvedUniversalViteConfig>,
         envs: &Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
         cwd: &AbsolutePath,
+        announce: bool,
     ) -> anyhow::Result<ResolvedSubcommand> {
-        self.resolve_inner(subcommand, resolved_vite_config, envs, cwd).await
+        self.resolve_inner(subcommand, resolved_vite_config, envs, cwd, announce).await
     }
 
     async fn resolve_inner(
@@ -80,6 +85,7 @@ impl SubcommandResolver {
         resolved_vite_config: Option<&ResolvedUniversalViteConfig>,
         envs: &Arc<FxHashMap<Arc<OsStr>, Arc<OsStr>>>,
         cwd: &AbsolutePath,
+        announce: bool,
     ) -> anyhow::Result<ResolvedSubcommand> {
         match subcommand {
             SynthesizableSubcommand::Lint { mut args } => {
@@ -293,15 +299,17 @@ impl SubcommandResolver {
                 // When dependency detection made the selection, name the
                 // marker before delegation; selections from `doc.provider`
                 // stay silent (rfcs/doc-command.md, Selection reporting).
-                // Stderr keeps the tool's stdout untouched.
-                if execution.source == vp_doc_cli::SelectionSource::Marker {
-                    eprintln!(
+                // Stderr keeps the tool's stdout untouched. Plan-time
+                // resolution passes `announce` false; the version warning
+                // still prints there because it stays true on a replay.
+                if announce && execution.source == vp_doc_cli::SelectionSource::Marker {
+                    vp_shared::output::raw_stderr(&format!(
                         "Using provider `{}` (dependency marker `{}` in package.json)",
                         execution.provider.id, execution.provider.marker
-                    );
+                    ));
                 }
                 if let Some(warning) = &execution.warning {
-                    eprintln!("warning: {warning}");
+                    vp_shared::output::warn(warning);
                 }
                 // Caching is opt-in through a configured `run.tasks`
                 // entry (rfcs/doc-command.md, Task Runner and Caching).
@@ -494,7 +502,10 @@ mod tests {
         let subcommand = SynthesizableSubcommand::Doc {
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
         };
-        resolver.resolve(subcommand, None, &envs, cwd).await.expect("the doc action should resolve")
+        resolver
+            .resolve(subcommand, None, &envs, cwd, true)
+            .await
+            .expect("the doc action should resolve")
     }
 
     #[tokio::test]

@@ -10,7 +10,9 @@ rust-version.workspace = true
 [dependencies]
 node-semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+# `preserve_order` keeps `DocInfoReport::to_json` emitting the documented
+# key order; without it the shape only holds through feature unification.
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 vp_migration = { workspace = true }
 vp_static_config = { workspace = true }

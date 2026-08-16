@@ -32,8 +32,10 @@ function docPackageJson(packageName: string): string {
         'docs:preview': 'vp doc preview',
       },
       devDependencies: {
-        // `^2.0.0-0` selects VitePress 2 releases and their prereleases.
-        vitepress: '^2.0.0-0',
+        // The same range `vp doc init` installs (crates/vp_doc_cli/src/providers.rs):
+        // the floor keeps a lagging or age-gated registry from resolving a
+        // pre-Vite-8 alpha that the version gate would then reject.
+        vitepress: '>=2.0.0-alpha.18 <3.0.0',
       },
     },
     null,

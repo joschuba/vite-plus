@@ -35,4 +35,5 @@ pub use providers::{
 };
 pub use resolve::{
     DocExecution, DocResolution, ProviderSelection, SelectionSource, resolve, select_provider,
+    validate_native_config,
 };

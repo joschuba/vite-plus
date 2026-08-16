@@ -153,18 +153,29 @@ pub fn select_provider(
 /// Native-config validation for integration-flavored providers: a marker
 /// cannot prove that an integration is active, and without it the built-in
 /// target would build the application instead of the documentation
-/// (rfcs/doc-command.md, Built-in Providers).
-fn validate_native_config(provider: &ProviderDefinition, cwd: &Path) -> Result<(), Error> {
+/// (rfcs/doc-command.md, Built-in Providers). `hint_init` appends the
+/// `vp doc init` suggestion; `init` itself passes `false` so its own
+/// failure never points back at the command that just ran.
+pub fn validate_native_config(
+    provider: &ProviderDefinition,
+    cwd: &Path,
+    hint_init: bool,
+) -> Result<(), Error> {
     match provider.native_config {
         None => Ok(()),
         Some(NativeConfigCheck::FileExists(names)) => {
             if names.iter().any(|name| cwd.join(name).is_file()) {
                 return Ok(());
             }
-            Err(user_message(format!(
-                "provider `{}` requires an Astro config file ({}) in the effective root\n\nRun `vp doc init {}` to set one up.",
-                provider.id, names[0], provider.id
-            )))
+            let base = format!(
+                "provider `{}` requires an Astro config file ({}) in the effective root",
+                provider.id, names[0]
+            );
+            Err(user_message(if hint_init {
+                format!("{base}\n\nRun `vp doc init {}` to set one up.", provider.id)
+            } else {
+                base
+            }))
         }
         Some(NativeConfigCheck::ViteConfigMentions(package)) => {
             let config =
@@ -176,10 +187,18 @@ fn validate_native_config(provider: &ProviderDefinition, cwd: &Path) -> Result<(
             if registered {
                 return Ok(());
             }
-            Err(user_message(format!(
-                "provider `{}` requires `{package}` registered in vite.config.ts\n\nAdd the plugin to `plugins`, or run `vp doc init {}`.",
-                provider.id, provider.id
-            )))
+            let base = format!(
+                "provider `{}` requires `{package}` registered in vite.config.ts",
+                provider.id
+            );
+            Err(user_message(if hint_init {
+                format!(
+                    "{base}\n\nAdd the plugin to `plugins`, or run `vp doc init {}`.",
+                    provider.id
+                )
+            } else {
+                format!("{base}\n\nAdd the plugin to `plugins`.")
+            }))
         }
     }
 }
@@ -211,6 +230,55 @@ pub(crate) fn version_satisfies(version: &str, range: &str) -> bool {
     version.satisfies(&range)
 }
 
+/// The version-gate outcome for an installed marker version
+/// (rfcs/doc-command.md, Unsupported tool version).
+pub(crate) enum VersionGate {
+    /// Inside the supported range, or no range declared.
+    Supported,
+    /// Outside the range but at or above the floor: unknown rather than
+    /// known-broken, so the caller warns and runs.
+    Outside { warning: String },
+    /// Below the floor, or an unreadable version: known incompatible.
+    BelowFloor { error: String },
+}
+
+pub(crate) fn assess_version(provider: &ProviderDefinition, version: Option<&str>) -> VersionGate {
+    let Some(range) = provider.version_range else {
+        return VersionGate::Supported;
+    };
+    if version.is_some_and(|version| version_satisfies(version, range)) {
+        return VersionGate::Supported;
+    }
+    let above_floor = version.zip(provider.version_floor).is_some_and(|(version, floor)| {
+        match (version.parse::<node_semver::Version>(), floor.parse()) {
+            (Ok(version), Ok(floor)) => version >= floor,
+            _ => false,
+        }
+    });
+    if above_floor {
+        // "Outside", not "above": npm range semantics also exclude a
+        // prerelease whose x.y.z tuple no comparator mentions (for
+        // example vitepress 2.1.0-beta.1 against the 2.x range), and
+        // that case is not above the range's upper bound.
+        VersionGate::Outside {
+            warning: format!(
+                "{}@{} is outside the supported range (`{range}`); running it anyway",
+                provider.marker,
+                version.unwrap_or("unknown"),
+            ),
+        }
+    } else {
+        VersionGate::BelowFloor {
+            error: format!(
+                "`vp doc` supports {display}, but found {marker}@{version}\n\nInstall a {display} release (`{range}`).",
+                display = provider.display_name,
+                marker = provider.marker,
+                version = version.unwrap_or("unknown"),
+            ),
+        }
+    }
+}
+
 /// Resolve an action request to a concrete execution. Fails with the
 /// user-facing diagnostics from the RFC before any process is created.
 pub fn resolve(
@@ -238,37 +306,16 @@ pub fn resolve(
     };
 
     // The version gate: below the floor is known incompatible and fails;
-    // above the range is unknown rather than known-broken, so it warns and
-    // runs (rfcs/doc-command.md, Unsupported tool version).
-    let mut warning = None;
-    if let Some(range) = provider.version_range {
-        let version = marker.version();
-        let satisfied = version.is_some_and(|version| version_satisfies(version, range));
-        if !satisfied {
-            let above_range =
-                version.zip(provider.version_floor).is_some_and(|(version, floor)| {
-                    match (version.parse::<node_semver::Version>(), floor.parse()) {
-                        (Ok(version), Ok(floor)) => version >= floor,
-                        _ => false,
-                    }
-                });
-            if !above_range {
-                return Err(user_message(format!(
-                    "`vp doc` supports {display}, but found {marker}@{version}\n\nInstall a {display} release (`{range}`).",
-                    display = provider.display_name,
-                    marker = provider.marker,
-                    version = version.unwrap_or("unknown"),
-                )));
-            }
-            warning = Some(format!(
-                "{}@{} is above the supported range (`{range}`); running it anyway",
-                provider.marker,
-                version.unwrap_or("unknown"),
-            ));
-        }
-    }
+    // outside the range but at or above the floor is unknown rather than
+    // known-broken, so it warns and runs (rfcs/doc-command.md, Unsupported
+    // tool version).
+    let warning = match assess_version(provider, marker.version()) {
+        VersionGate::Supported => None,
+        VersionGate::Outside { warning } => Some(warning),
+        VersionGate::BelowFloor { error } => return Err(user_message(error)),
+    };
 
-    validate_native_config(provider, cwd)?;
+    validate_native_config(provider, cwd, true)?;
 
     let mut args = vec![request.action.as_str().to_string()];
     args.extend(request.args.iter().cloned());
@@ -613,7 +660,25 @@ mod tests {
         let execution = resolve(&build_request(), dir.path(), None).unwrap();
         let warning = execution.warning.expect("an above-range version warns");
         assert!(warning.contains("vitepress@3.0.0"), "{warning}");
-        assert!(warning.contains("above the supported range"), "{warning}");
+        assert!(warning.contains("outside the supported range"), "{warning}");
+        assert!(matches!(execution.resolution, DocResolution::PackageBin { .. }));
+    }
+
+    #[test]
+    fn an_in_range_prerelease_of_a_later_tuple_warns_and_runs() {
+        // npm range semantics exclude 2.1.0-beta.1 from the 2.x range
+        // (no comparator shares its tuple); the gate must not hard-fail it
+        // and the warning must not claim it is above the range.
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), r#"{ "devDependencies": { "vitepress": "2.1.0-beta.1" } }"#);
+        install_package(
+            dir.path(),
+            "vitepress",
+            r#"{ "name": "vitepress", "version": "2.1.0-beta.1", "bin": { "vitepress": "bin/vitepress.js" } }"#,
+        );
+        let execution = resolve(&build_request(), dir.path(), None).unwrap();
+        let warning = execution.warning.expect("an excluded prerelease warns");
+        assert!(warning.contains("outside the supported range"), "{warning}");
         assert!(matches!(execution.resolution, DocResolution::PackageBin { .. }));
     }
 
