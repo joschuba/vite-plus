@@ -42,6 +42,17 @@ use self::{
     types::CLIArgs,
 };
 
+/// The `-C` spelling of a resolved target for user-facing hints: relative to
+/// the invocation directory when the target is inside it, absolute otherwise.
+fn display_target(invocation: &AbsolutePath, target: &AbsolutePath) -> String {
+    if let Ok(Some(rel)) = target.strip_prefix(invocation)
+        && !rel.as_str().is_empty()
+    {
+        return rel.as_str().to_string();
+    }
+    target.as_path().display().to_string()
+}
+
 /// Execute a synthesizable subcommand directly (not through vite-task Session).
 /// No caching, no task graph, no dependency resolution.
 async fn execute_direct_subcommand(
@@ -54,16 +65,17 @@ async fn execute_direct_subcommand(
     // in the resolved directory (rfcs/cwd-flag.md).
     let (target, workspace_root_hint) = app_target::resolve_app_target(&subcommand, cwd)?;
     let retargeted = matches!(&target, app_target::AppTarget::Dir(_));
-    let cwd = match &target {
+    let (cwd, retarget) = match &target {
         app_target::AppTarget::Exit(status) => return Ok(*status),
-        app_target::AppTarget::Dir(dir) => dir,
-        app_target::AppTarget::CurrentDir => cwd,
+        app_target::AppTarget::Dir(dir) => (dir, Some(display_target(cwd, dir))),
+        app_target::AppTarget::CurrentDir => (cwd, None),
     };
     // The refusal belongs to the resolved target: elicitation or
     // `defaultPackage` can select a package that the invocation directory
     // never saw, or move the command out of a framework root into a plain
-    // Vite app.
-    if let Some(exit) = framework_guard::check(&subcommand, cwd) {
+    // Vite app. A retarget rides into the hints as `-C <target>`, so they
+    // run in the refused package.
+    if let Some(exit) = framework_guard::check(&subcommand, cwd, retarget.as_deref()) {
         return Ok(exit);
     }
 

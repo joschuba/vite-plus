@@ -88,6 +88,44 @@ error: this project uses Nuxt (nuxt.config.ts). `vp build` runs the bundled Vite
 hint: did you mean `vp run make`? The make script runs `nuxt build`.
 ```
 
+## `cd mismatched-script && vp dev`
+
+an unrelated same-named script does not become the hint; the script that runs nuxt dev does
+
+**Exit code:** 1
+
+```
+error: this project uses Nuxt (nuxt.config.ts). `vp dev` runs the bundled Vite CLI, not the Nuxt CLI.
+hint: did you mean `vp run serve`? The serve script runs `nuxt dev`.
+```
+
+## `vp build web`
+
+a positional root is inspected instead of the invocation package: the plain Vite child builds
+
+```
+note: You are running `vp build` as a Vite+ built-in command. If you meant to run the build npm script, use `vpr build` instead.
+note: `vp build web` sets Vite's root without changing the working directory. To run as if started there, use `vp -C web build`.
+✓ 4 modules transformed.
+computing gzip size...
+web/dist/index.html                <size> kB │ gzip: <size> kB
+web/dist/assets/index-<hash>.js  <size> kB │ gzip: <size> kB
+
+✓ built in <duration>
+```
+
+## `vp dev astro`
+
+a positional root inside an Astro package refuses, and the hint carries -C
+
+**Exit code:** 1
+
+```
+note: `vp dev astro` sets Vite's root without changing the working directory. To run as if started there, use `vp -C astro dev`.
+error: this project uses Astro (astro.config.mjs). `vp dev` runs the bundled Vite CLI, not the Astro CLI.
+hint: did you mean `vp -C astro run dev`?
+```
+
 ## `vp dev --config vite.config.ts --port 12312312312`
 
 an explicit --config selects the bundled Vite CLI on purpose, so only the script note prints (the invalid port stops the server immediately)

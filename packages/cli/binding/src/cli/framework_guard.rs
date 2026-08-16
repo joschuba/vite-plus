@@ -9,9 +9,11 @@
 //! script that runs the framework command, or at the framework CLI through
 //! `vp exec` when no script matches. The guard checks direct invocations
 //! only: a command spawned from a task or package script, for example a
-//! `"dev": "vp dev"` script, runs as invoked. Help and version requests
-//! reach the tool, and an explicit `--config`/`-c` flag selects a Vite
-//! config on purpose, so both skip the refusal.
+//! `"dev": "vp dev"` script, runs as invoked. The guarded directory is the
+//! one Vite would use: the invocation directory, a positional root, or the
+//! target that `defaultPackage`/elicitation resolved. Help and version
+//! requests reach the tool, and an explicit `--config`/`-c` flag selects a
+//! Vite config on purpose, so both skip the refusal.
 
 use owo_colors::OwoColorize;
 use vp_shared::output;
@@ -73,36 +75,53 @@ struct Framework {
 
 /// Refuse `vp dev` / `vp build` in a Nuxt or Astro project.
 ///
-/// Returns the exit status after it prints the refusal. Returns `None` when
-/// the command can proceed.
+/// `retarget` is the path that elicitation or `defaultPackage` resolved for
+/// a bare command, relative to the invocation directory; hints then carry
+/// the matching `-C <target>` so they run in the refused package. Returns
+/// the exit status after it prints the refusal, or `None` when the command
+/// can proceed.
 pub(super) fn check(
     subcommand: &SynthesizableSubcommand,
     cwd: &AbsolutePath,
+    retarget: Option<&str>,
 ) -> Option<ExitStatus> {
-    let (command, manifest, framework, config_file) = find_refusal(subcommand, cwd)?;
-    let built_in = format!("`vp {command}`").bright_blue().to_string();
+    let refusal = find_refusal(subcommand, cwd, retarget)?;
+    let built_in = format!("`vp {}`", refusal.command).bright_blue().to_string();
     output::error(&format!(
         "this project uses {name} ({config_file}). {built_in} runs the bundled Vite CLI, \
          not the {name} CLI.",
-        name = framework.name,
+        name = refusal.framework.name,
+        config_file = refusal.config_file,
     ));
-    output::raw_stderr(&format!("hint: {}", run_hint(&manifest, framework, command)));
+    output::raw_stderr(&format!("hint: {}", run_hint(&refusal)));
     Some(ExitStatus(1))
 }
 
-/// Whether `check` would refuse in `cwd`, without output. The script note
-/// calls this before target resolution: a note that recommends `vpr` must
-/// not print right before a refusal.
+/// Whether `check` would refuse, without output. The script note and
+/// workspace elicitation ask this before they act: a note must not
+/// recommend `vpr` right before a refusal, and a package listing must not
+/// hide one.
 pub(super) fn applies(subcommand: &SynthesizableSubcommand, cwd: &AbsolutePath) -> bool {
-    find_refusal(subcommand, cwd).is_some()
+    find_refusal(subcommand, cwd, None).is_some()
 }
 
-/// The refusal for `cwd`, or `None` when the command can proceed. The
-/// returned manifest is the enclosing `package.json`, for the hint.
+struct Refusal {
+    command: &'static str,
+    framework: &'static Framework,
+    config_file: &'static str,
+    /// The enclosing `package.json` of the refused directory, for the hint.
+    manifest: serde_json::Value,
+    /// `-C` target for the hint when the refused directory is not the
+    /// invocation directory (a positional root or a resolved retarget).
+    target: Option<String>,
+}
+
+/// The refusal for this invocation, or `None` when the command can proceed.
 fn find_refusal(
     subcommand: &SynthesizableSubcommand,
     cwd: &AbsolutePath,
-) -> Option<(&'static str, serde_json::Value, &'static Framework, &'static str)> {
+    retarget: Option<&str>,
+) -> Option<Refusal> {
     let (command, args) = match subcommand {
         SynthesizableSubcommand::Dev { args } => ("dev", args),
         SynthesizableSubcommand::Build { args } => ("build", args),
@@ -113,49 +132,75 @@ fn find_refusal(
     if super::script_note::spawned_from_script() {
         return None;
     }
-    if asks_help_or_version(args) || selects_explicit_config(args) {
-        return None;
-    }
+    // The tool's own arg walk decides what the guard inspects: a positional
+    // is the Vite root, and an explicit invocation (a help/version request,
+    // a `-c`/`--config` file) must reach the tool untouched.
+    let positional_root;
+    let (dir, target): (&AbsolutePath, Option<&str>) =
+        match super::app_target::classify_args(command, args) {
+            super::app_target::ArgTarget::Explicit => return None,
+            super::app_target::ArgTarget::Positional(root) => {
+                positional_root = cwd.join(root).clean();
+                (&positional_root, Some(root))
+            }
+            super::app_target::ArgTarget::Bare => (cwd, retarget),
+        };
     // `vp run` resolves the task from the nearest `package.json`. The same
     // walk here keeps the hint correct from a subdirectory.
-    let package = vt_workspace::find_package_root(cwd).ok()?;
+    let package = vt_workspace::find_package_root(dir).ok()?;
     let (framework, config_file) = detect(package.path)?;
     let manifest = serde_json::from_slice::<serde_json::Value>(package.package_json.content())
         .unwrap_or(serde_json::Value::Null);
-    Some((command, manifest, framework, config_file))
+    Some(Refusal { command, framework, config_file, manifest, target: target.map(str::to_string) })
 }
 
 /// The hint that follows the refusal. It points at the first path that works
-/// in this package:
+/// in the refused package:
 ///
-/// 1. the `package.json` script with the command's name,
-/// 2. a script that runs the framework command under another name,
+/// 1. the `package.json` script with the command's name, when its command
+///    runs the framework (a `"dev": "storybook dev"` must not become the
+///    hint),
+/// 2. another script that runs the framework command,
 /// 3. the framework CLI through `vp exec`.
 ///
 /// The check reads `package.json` scripts only. A `run.tasks` entry in
 /// `vite.config.ts` with the command's name also works with `vp run`, but
 /// the guard does not load that config.
-fn run_hint(manifest: &serde_json::Value, framework: &Framework, command: &str) -> String {
+fn run_hint(refusal: &Refusal) -> String {
+    let Refusal { command, framework, manifest, target, .. } = refusal;
+    let vp = match target {
+        Some(target) => format!("vp -C {target}"),
+        None => "vp".to_string(),
+    };
     if let Some(scripts) = manifest.get("scripts").and_then(serde_json::Value::as_object) {
-        if scripts.get(command).is_some_and(serde_json::Value::is_string) {
-            let via_run = format!("`vp run {command}`").bright_blue().to_string();
+        let named = scripts.get(*command).and_then(serde_json::Value::as_str);
+        if named.is_some_and(|script| framework_invocation(script, framework, command).is_some()) {
+            let via_run = format!("`{vp} run {command}`").bright_blue().to_string();
             return format!("did you mean {via_run}?");
         }
-        for (name, value) in scripts {
-            let Some(value) = value.as_str() else { continue };
-            for &bin in framework.bins {
-                let framework_command = format!("{bin} {command}");
-                if contains_word(value, &framework_command) {
-                    let via_run = format!("`vp run {name}`").bright_blue().to_string();
-                    return format!(
-                        "did you mean {via_run}? The {name} script runs `{framework_command}`."
-                    );
-                }
+        for (name, script) in scripts {
+            if name == command {
+                continue;
+            }
+            let Some(script) = script.as_str() else { continue };
+            if let Some(invocation) = framework_invocation(script, framework, command) {
+                let via_run = format!("`{vp} run {name}`").bright_blue().to_string();
+                return format!("did you mean {via_run}? The {name} script runs `{invocation}`.");
             }
         }
     }
-    let via_exec = format!("`vp exec {} {command}`", framework.bins[0]).bright_blue().to_string();
+    let via_exec = format!("`{vp} exec {} {command}`", framework.bins[0]).bright_blue().to_string();
     format!("run the {} CLI with {via_exec}.", framework.name)
+}
+
+/// The `<bin> <command>` invocation inside `script`, when the script runs
+/// the framework command.
+fn framework_invocation(script: &str, framework: &Framework, command: &str) -> Option<String> {
+    framework
+        .bins
+        .iter()
+        .map(|bin| format!("{bin} {command}"))
+        .find(|invocation| contains_word(script, invocation))
 }
 
 /// Whether `text` contains `pattern` between whitespace boundaries, so
@@ -187,33 +232,13 @@ fn detect(dir: &AbsolutePath) -> Option<(&'static Framework, &'static str)> {
     None
 }
 
-/// The args the tool would parse as flags: everything before the `--`
-/// terminator. Tokens after the terminator are positionals.
-fn forwarded_flags(args: &[String]) -> impl Iterator<Item = &str> {
-    args.iter().map(String::as_str).take_while(|arg| *arg != "--")
-}
-
-/// Whether the forwarded args ask the tool for help or its version. These
-/// requests must reach the tool: `vp dev --help` prints the Vite help.
-fn asks_help_or_version(args: &[String]) -> bool {
-    forwarded_flags(args).any(super::help::is_app_tool_help_or_version_flag)
-}
-
-/// Whether the forwarded args select a config file explicitly. The capital
-/// `-C` flag retargets the directory. It is a different flag and does not
-/// count.
-fn selects_explicit_config(args: &[String]) -> bool {
-    forwarded_flags(args).any(|arg| {
-        arg == "-c" || arg == "--config" || arg.starts_with("--config=") || arg.starts_with("-c=")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use vt_path::AbsolutePathBuf;
 
     use super::{
-        FRAMEWORKS, asks_help_or_version, contains_word, detect, run_hint, selects_explicit_config,
+        super::app_target::{ArgTarget, classify_args},
+        FRAMEWORKS, Refusal, contains_word, detect, run_hint,
     };
 
     fn framework(name: &str) -> &'static super::Framework {
@@ -274,11 +299,41 @@ mod tests {
         std::fs::remove_dir_all(dir.as_path()).expect("remove temp dir");
     }
 
+    fn refusal(
+        name: &str,
+        command: &'static str,
+        manifest: serde_json::Value,
+        target: Option<&str>,
+    ) -> Refusal {
+        Refusal {
+            command,
+            framework: framework(name),
+            config_file: "nuxt.config.ts",
+            manifest,
+            target: target.map(str::to_string),
+        }
+    }
+
     #[test]
     fn hint_prefers_the_script_with_the_command_name() {
         let manifest = serde_json::json!({ "scripts": { "dev": "nuxt dev" } });
-        let hint = run_hint(&manifest, framework("Nuxt"), "dev");
+        let hint = run_hint(&refusal("Nuxt", "dev", manifest, None));
         assert!(hint.contains("vp run dev"), "hint was: {hint}");
+    }
+
+    #[test]
+    fn hint_skips_a_same_named_script_that_runs_something_else() {
+        let manifest = serde_json::json!({ "scripts": {
+            "dev": "storybook dev",
+            "serve": "nuxt dev --host",
+        } });
+        let hint = run_hint(&refusal("Nuxt", "dev", manifest, None));
+        assert!(hint.contains("vp run serve"), "hint was: {hint}");
+        assert!(!hint.contains("vp run dev"), "hint was: {hint}");
+
+        let only_unrelated = serde_json::json!({ "scripts": { "dev": "storybook dev" } });
+        let hint = run_hint(&refusal("Nuxt", "dev", only_unrelated, None));
+        assert!(hint.contains("vp exec nuxt dev"), "hint was: {hint}");
     }
 
     #[test]
@@ -287,20 +342,29 @@ mod tests {
             "devtools": "nuxt devtools enable",
             "start": "NODE_OPTIONS=--inspect nuxi dev --host",
         } });
-        let hint = run_hint(&manifest, framework("Nuxt"), "dev");
+        let hint = run_hint(&refusal("Nuxt", "dev", manifest, None));
         assert!(hint.contains("vp run start"), "hint was: {hint}");
         assert!(hint.contains("nuxi dev"), "hint was: {hint}");
     }
 
     #[test]
     fn hint_falls_back_to_vp_exec_without_a_matching_script() {
-        let empty = serde_json::json!({});
-        let hint = run_hint(&empty, framework("Nuxt"), "dev");
+        let hint = run_hint(&refusal("Nuxt", "dev", serde_json::json!({}), None));
         assert!(hint.contains("vp exec nuxt dev"), "hint was: {hint}");
 
         let unrelated = serde_json::json!({ "scripts": { "lint": "oxlint ." } });
-        let hint = run_hint(&unrelated, framework("Astro"), "build");
+        let hint = run_hint(&refusal("Astro", "build", unrelated, None));
         assert!(hint.contains("vp exec astro build"), "hint was: {hint}");
+    }
+
+    #[test]
+    fn hint_carries_the_resolved_target() {
+        let manifest = serde_json::json!({ "scripts": { "dev": "nuxt dev" } });
+        let hint = run_hint(&refusal("Nuxt", "dev", manifest, Some("apps/web")));
+        assert!(hint.contains("vp -C apps/web run dev"), "hint was: {hint}");
+
+        let hint = run_hint(&refusal("Nuxt", "build", serde_json::json!({}), Some("app")));
+        assert!(hint.contains("vp -C app exec nuxt build"), "hint was: {hint}");
     }
 
     #[test]
@@ -312,25 +376,32 @@ mod tests {
     }
 
     #[test]
-    fn explicit_config_flags_skip_the_refusal() {
+    fn arg_classification_drives_the_guarded_directory() {
         let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
-        assert!(selects_explicit_config(&owned(&["--config", "vite.config.ts"])));
-        assert!(selects_explicit_config(&owned(&["--config=vite.config.ts"])));
-        assert!(selects_explicit_config(&owned(&["-c", "vite.config.ts"])));
-        assert!(!selects_explicit_config(&owned(&["--port", "5000"])));
-        assert!(!selects_explicit_config(&owned(&["-C", "apps/web"])));
-        assert!(!selects_explicit_config(&owned(&["--", "--config"])));
-    }
-
-    #[test]
-    fn help_and_version_requests_skip_the_refusal() {
-        let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
-        assert!(asks_help_or_version(&owned(&["--help"])));
-        assert!(asks_help_or_version(&owned(&["-h"])));
-        assert!(asks_help_or_version(&owned(&["--version"])));
-        assert!(asks_help_or_version(&owned(&["-v"])));
-        assert!(asks_help_or_version(&owned(&["--port", "5000", "--help"])));
-        assert!(!asks_help_or_version(&owned(&["--port", "5000"])));
-        assert!(!asks_help_or_version(&owned(&["--", "--help"])));
+        // Explicit invocations reach the tool untouched.
+        for args in [
+            vec!["--help"],
+            vec!["-h"],
+            vec!["--version"],
+            vec!["-v"],
+            vec!["--port", "5000", "--help"],
+            vec!["--config", "vite.config.ts"],
+            vec!["--config=vite.config.ts"],
+            vec!["-c", "vite.config.ts"],
+        ] {
+            assert!(
+                matches!(classify_args("dev", &owned(&args)), ArgTarget::Explicit),
+                "expected Explicit for {args:?}"
+            );
+        }
+        // A positional is the Vite root and becomes the guarded directory.
+        assert!(matches!(classify_args("dev", &owned(&["web"])), ArgTarget::Positional("web")));
+        assert!(matches!(
+            classify_args("dev", &owned(&["--cors", "web"])),
+            ArgTarget::Positional("web")
+        ));
+        // A flag value is not a positional; a bare command guards the
+        // invocation directory.
+        assert!(matches!(classify_args("dev", &owned(&["--port", "5000"])), ArgTarget::Bare));
     }
 }
