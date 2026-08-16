@@ -108,7 +108,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
             dependencies: &["vitepress@>=2.0.0-alpha.18 <3.0.0"],
             starter_files: &[StarterFile {
                 path: "index.md",
-                content: "# Hello VitePress\n\nStart the dev server with `vp doc`.\n",
+                content: "# Documentation\n\nThis site runs on [VitePress](https://vitepress.dev) through `vp doc`.\n\n## Commands\n\n- `vp doc` starts the dev server.\n- `vp doc build` builds the site for production.\n- `vp doc preview` serves the production build.\n\n## Next steps\n\n- Add pages as Markdown files next to this one; every `.md` file becomes a route.\n- Configure the site title, theme, and sidebar in `.vitepress/config.ts`; see the [VitePress guide](https://vitepress.dev/guide/what-is-vitepress).\n- Read how `vp doc` selects and runs the tool in the [Vite+ doc guide](https://viteplus.dev/guide/doc).\n",
             }],
             prompt_hint: "Vue",
         }),
@@ -161,7 +161,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
                 },
                 StarterFile {
                     path: "src/content/docs/index.md",
-                    content: "---\ntitle: Hello Starlight\n---\n\nStart the dev server with `vp doc`.\n",
+                    content: "---\ntitle: Documentation\n---\n\nThis site runs on [Starlight](https://starlight.astro.build) through `vp doc`.\n\n## Commands\n\n- `vp doc` starts the dev server.\n- `vp doc build` builds the site for production.\n- `vp doc preview` serves the production build.\n\n## Next steps\n\n- Add pages as `.md` or `.mdx` files under `src/content/docs/`.\n- Configure the site title and sidebar in `astro.config.mjs`; see the [Starlight guide](https://starlight.astro.build/getting-started/).\n- Read how `vp doc` selects and runs the tool in the [Vite+ doc guide](https://viteplus.dev/guide/doc).\n",
                 },
             ],
             prompt_hint: "Astro",
@@ -193,7 +193,7 @@ pub static DOC_PROVIDERS: &[ProviderDefinition] = &[
                 },
                 StarterFile {
                     path: "docs/index.md",
-                    content: "# Hello Ox Content\n\nStart the dev server with `vp doc`.\n",
+                    content: "# Documentation\n\nThis site runs on [Ox Content](https://github.com/ubugeeei-prod/ox-content) through `vp doc`.\n\n## Commands\n\n- `vp doc` starts the dev server.\n- `vp doc build` builds the site for production.\n- `vp doc preview` serves the production build.\n\n## Next steps\n\n- Add pages as Markdown files under `docs/`.\n- Configure the plugin (for example `srcDir`) in `vite.config.ts`; see the [Ox Content readme](https://github.com/ubugeeei-prod/ox-content).\n- Read how `vp doc` selects and runs the tool in the [Vite+ doc guide](https://viteplus.dev/guide/doc).\n",
                 },
                 StarterFile {
                     path: "index.html",

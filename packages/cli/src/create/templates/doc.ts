@@ -49,9 +49,21 @@ export default defineConfig({
 });
 `;
 
-const DOC_INDEX_MD = `# Hello VitePress
+const DOC_INDEX_MD = `# Documentation
 
-Start the dev server with \`vp doc\`.
+This site runs on [VitePress](https://vitepress.dev) through \`vp doc\`.
+
+## Commands
+
+- \`vp doc\` starts the dev server.
+- \`vp doc build\` builds the site for production.
+- \`vp doc preview\` serves the production build.
+
+## Next steps
+
+- Add pages as Markdown files next to this one; every \`.md\` file becomes a route.
+- Configure the site title, theme, and sidebar in \`.vitepress/config.ts\`; see the [VitePress guide](https://vitepress.dev/guide/what-is-vitepress).
+- Read how \`vp doc\` selects and runs the tool in the [Vite+ doc guide](https://viteplus.dev/guide/doc).
 `;
 
 export async function executeDocScaffold(
