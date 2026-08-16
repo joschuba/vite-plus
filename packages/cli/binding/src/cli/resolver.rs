@@ -303,13 +303,25 @@ impl SubcommandResolver {
                 if let Some(warning) = &execution.warning {
                     eprintln!("warning: {warning}");
                 }
-                // Every doc action stays uncached: the tool loads upstream
-                // Vite without cooperative environment reporting, so a
-                // default cache could replay another deployment's output.
-                // A configured `run.tasks` entry with declared environment
-                // and outputs is the cached form (rfcs/doc-command.md,
-                // Task Runner and Caching).
-                let cache_config = UserCacheConfig::disabled();
+                // Caching is opt-in through a configured `run.tasks`
+                // entry (rfcs/doc-command.md, Task Runner and Caching).
+                // The task-runner merge enables a cache only when the
+                // parent task and this synthetic config both agree, so
+                // `build` returns an empty enabled config: package
+                // scripts stay uncached under the `run.cache` defaults,
+                // while a configured task's own declared cache governs.
+                // The servers return disabled, which force-uncaches them
+                // even under a configured task.
+                let cache_config = if request.action.is_server() {
+                    UserCacheConfig::disabled()
+                } else {
+                    UserCacheConfig::with_config(EnabledCacheConfig {
+                        env: None,
+                        untracked_env: None,
+                        input: None,
+                        output: None,
+                    })
+                };
 
                 match execution.resolution {
                     vp_doc_cli::DocResolution::PackageBin { bin_path, args } => {
@@ -486,12 +498,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_doc_action_stays_uncached_by_default() {
+    async fn doc_cache_policy_follows_the_opt_in_model() {
         let (dir, cwd) = doc_fixture("policy");
         let build = resolve_doc(&["build"], &cwd).await;
-        // Uncached by default, `build` included; a configured `run.tasks`
-        // entry is the cached form (rfcs/doc-command.md).
-        assert!(matches!(build.cache_config, UserCacheConfig::Disabled { .. }));
+        // `build` carries an empty enabled config: the task-runner merge
+        // enables a cache only when the parent task agrees, so package
+        // scripts stay uncached under the `run.cache` defaults and a
+        // configured `run.tasks` entry is the cached form
+        // (rfcs/doc-command.md, Task Runner and Caching).
+        assert!(matches!(build.cache_config, UserCacheConfig::Enabled { .. }));
         // The resolved execution is the package bin through the managed
         // runtime.
         assert_eq!(build.program.as_ref(), OsStr::new("node"));
