@@ -58,7 +58,7 @@ Detection reads `dependencies` and `devDependencies`. Most projects need no conf
 }
 ```
 
-A package selects exactly one provider. When a package declares more than one marker, `vp doc` reports a misconfiguration and exits. The one legitimate window is a migration, where the old and the new marker coexist until the switch completes. Set `doc.provider` to bridge that window:
+A package selects exactly one provider. When a package declares more than one marker, `vp doc` reports a misconfiguration and exits. The one legitimate case is a tool migration, where the old and the new marker coexist until the switch completes. While both markers coexist, set `doc.provider` to select which one runs:
 
 ```ts [vite.config.ts]
 import { defineConfig } from 'vite-plus';
