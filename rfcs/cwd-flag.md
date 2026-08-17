@@ -5,7 +5,7 @@
 Add a global `-C <dir>` flag to vp, then use it to fix the app-command experience in monorepos. Everything is additive and backward compatible:
 
 1. **`-C <dir>` global flag** (the feature): for every vp command, `vp -C <dir> <cmd>` behaves exactly like `cd <dir> && vp <cmd>`, following the `git -C` / `make -C` convention: the first-class "run there" form vp lacks. Positional semantics stay untouched: `vp dev <path>` keeps upstream Vite semantics (`root` only), and `vp pack` positionals stay tsdown entries.
-2. **App-command UX built on `-C`**: running `vp dev` / `vp build` / `vp preview` / `vp pack` bare at a workspace root elicits the missing target instead of silently running against the root: an interactive fuzzy package picker in a TTY, a `defaultPackage` config for repos with one blessed target, and a clear listing plus exit 1 when non-interactive. All three are defined as an implicit `-C <dir>`.
+2. **App-command UX built on `-C`**: running `vp dev` / `vp build` / `vp preview` / `vp pack` bare at a workspace root elicits the missing target instead of silently running against the root: an interactive fuzzy package picker in a TTY, a `defaultPackage` config for repos with one blessed target, and a clear listing plus exit 1 when non-interactive. All three are defined as an implicit `-C <dir>`. `vp doc` joins the same model through [doc-command.md](./doc-command.md).
 
 In the common flows users never type `-C`: bare `vp dev` at the root goes through the picker or `defaultPackage`, and inside a package it runs there as today. `-C` is the explicit, teachable form underneath. The commands stay singular: `vp dev` still starts exactly one Vite dev server in one directory. Running a task across many packages at once remains the job of `vp run` (`-r`, `--filter`).
 
@@ -257,6 +257,8 @@ An app command invocation is **bare** when it has no `-C` and no positional targ
 
 "Workspace root" means the current directory's package is the workspace root package, as determined by `vt_workspace::find_workspace_root` (already called on every invocation in `packages/cli/binding/src/cli/mod.rs`).
 
+`vp doc` ([doc-command.md](./doc-command.md)) follows the same resolution order with one substitution: the picker in step 4 and the listing in step 5 show only workspace packages that declare a documentation provider marker. The `doc` entry of the `defaultPackage` object covers step 3, and the redirect covers every `vp doc` subcommand, `init` and `info` included. `vp doc` has no directory positional, so step 2 never applies; every argument after `dev`, `build`, or `preview` belongs to the tool. Provider detection itself never scans beyond the nearest manifest, so the doc picker and listing remain the only workspace enumeration.
+
 ### Equivalence invariant
 
 For every vp command:
@@ -309,12 +311,13 @@ export default defineConfig({
 });
 ```
 
-- Type: `string` (one directory for all four commands) or a per-command object (`{ dev: './apps/web', pack: './packages/ui' }`, added on review demand). A command absent from the object falls through to the picker/listing resolution.
+- Type: `string` (one directory for the four app commands; never `doc`) or a per-command object (`{ dev: './apps/web', doc: './packages/docs' }`, added on review demand). The object gains a `doc` key with `vp doc`, and `vp doc` participates only through the object form. A command absent from the object falls through to the picker/listing resolution.
 - Consulted when a bare app command runs in the directory containing the root config: a workspace root, or a non-workspace repo root. The non-workspace shape has no package list, so `defaultPackage` is the only mechanism that covers it. An explicit `-C` always wins.
 - A missing directory errors: `defaultPackage points to a missing directory: ./frontend`.
 - Read via static extraction (`vp_static_config` + the loader in `packages/cli/binding/src/cli/handler.rs`), like `run` config. At a non-workspace root there is no install to execute the config, so the file must work unexecuted: a plain default-export object with a static string value.
 - Only an explicitly declared `defaultPackage` changes behavior. A declared but non-static value (e.g. `process.env.DIR`) errors; a config that is unanalyzable or hides fields behind a spread is treated as not declaring the key and falls through to the picker or current-dir resolution, so an exotic config can never break unrelated bare commands.
 - Consulted only at the invocation root (a workspace root, a standalone package root, or a directory with no `package.json` ancestry). Below a workspace root the current directory already identifies the target, so a member package's own config never redirects.
+- `doc` is a command key for `vp doc` ([doc-command.md](./doc-command.md)). The string form covers the four app commands only, never `doc`: the blessed app package and the documentation package are usually different packages, so `doc` participates only through an explicit object entry.
 
 ## Decisions
 
@@ -332,7 +335,7 @@ Below the root the cwd already identifies the project, so prompting would be noi
 
 ### Elicitation scope
 
-`-C` is global and works with every command. The elicitation behaviors (picker, `defaultPackage`, root error) apply only to the single-target app commands, because only they are ambiguous at the root. Tree-scoped commands (`test`, `lint`, `fmt`, `check`) mean "the whole repo" there, which is their desired behavior. Workspace-state commands (`install`, `add`, `outdated`, ...) have the root as their natural home. Orchestrators (`run`, `exec`) own their selection models and remain the way to run one task across many packages. A future command joins the elicitation set exactly when its subject is one package directory.
+`-C` is global and works with every command. The elicitation behaviors (picker, `defaultPackage`, root error) apply only to the single-target app commands, because only they are ambiguous at the root. Tree-scoped commands (`test`, `lint`, `fmt`, `check`) mean "the whole repo" there, which is their desired behavior. Workspace-state commands (`install`, `add`, `outdated`, ...) have the root as their natural home. Orchestrators (`run`, `exec`) own their selection models and remain the way to run one task across many packages. A future command joins the elicitation set exactly when its subject is one package directory. `vp doc` is the first such addition: its subject is the documentation package, its config default is the `doc` entry of `defaultPackage`, and its picker filters to provider-marker packages ([doc-command.md](./doc-command.md)).
 
 ## Implementation Architecture
 
