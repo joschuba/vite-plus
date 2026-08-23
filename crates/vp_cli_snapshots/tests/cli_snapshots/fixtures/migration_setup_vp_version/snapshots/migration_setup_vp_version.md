@@ -1,5 +1,11 @@
 # migration_setup_vp_version
 
+## `vpt mkdir -p .github/workflows`
+
+
+## `vpt cp workflow.txt .github/workflows/ci.yml`
+
+
 ## `vp migrate --no-interactive`
 
 an existing Vite+ project upgrades the frozen setup-vp tag
