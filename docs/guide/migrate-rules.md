@@ -252,6 +252,13 @@ as `run` or `--`:
 
 Unrelated `bunx` commands and other package-executor forms remain unchanged.
 
+## Continuous Integration Rules
+
+Migration replaces exact `voidzero-dev/setup-vp@v1` references in GitHub
+Actions workflows and composite actions with the latest exact `setup-vp`
+release known to that Vite+ version. The frozen `v1` tag does not receive new
+releases. Existing exact versions and commit SHAs are left unchanged.
+
 ## Node.js Version Rules
 
 Migration converts legacy Node.js version-manager files to `.node-version`,

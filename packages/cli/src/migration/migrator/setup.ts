@@ -6,6 +6,7 @@ import { globSync } from 'glob';
 import semver from 'semver';
 
 import { type DownloadPackageManagerResult } from '../../../binding/index.js';
+import { SETUP_VP_VERSION } from '../../utils/constants.ts';
 import { editJsonFile } from '../../utils/json.ts';
 import { detectConfigs } from '../detector.ts';
 import { type MigrationReport } from '../report.ts';
@@ -130,9 +131,9 @@ export function parseNvmrcVersion(alias: string): string | null {
 const NODE_VERSION_FILE_NVMRC_RE = /(node-version-file:[ \t]*)(['"]?)(\.\/)?\.nvmrc\2(?=\s|$)/gm;
 
 /**
- * Collect GitHub Actions YAML files that may carry a `node-version-file:`
- * reference: top-level workflows (`.github/workflows/*.{yml,yaml}`, which GitHub
- * runs only when flat in that directory) and composite action definitions
+ * Collect GitHub Actions YAML files that migration may inspect: top-level
+ * workflows (`.github/workflows/*.{yml,yaml}`, which GitHub runs only when flat
+ * in that directory) and composite action definitions
  * (`.github/actions/**\/action.{yml,yaml}`, which may nest at any depth). Returns
  * absolute paths; a missing `.github` tree just yields an empty list. `nocase`
  * keeps the match case-insensitive on case-sensitive filesystems.
@@ -143,6 +144,51 @@ function collectGithubActionFiles(projectPath: string): string[] {
     absolute: true,
     nocase: true,
   });
+}
+
+/**
+ * Match an exact `voidzero-dev/setup-vp@v1` action reference while preserving
+ * indentation, list syntax, quote style, and trailing comments. The end guard
+ * prevents prefix matches such as `@v1.2.3` or `@v10`.
+ */
+const SETUP_VP_V1_RE =
+  /^([ \t]*(?:-[ \t]*)?uses[ \t]*:[ \t]*)(['"]?)voidzero-dev\/setup-vp@v1\2(?=[ \t]*(?:#.*)?\r?$)/gm;
+
+/**
+ * Replace the frozen `voidzero-dev/setup-vp@v1` tag with the latest exact
+ * release known to this Vite+ version. GitHub workflow files and composite
+ * action definitions are both covered. Existing exact versions, commit SHAs,
+ * and commented-out steps are left unchanged.
+ *
+ * Returns the project-relative paths of the updated files.
+ */
+export function migrateSetupVpVersion(projectPath: string, report?: MigrationReport): string[] {
+  const updatedFiles: string[] = [];
+
+  for (const filePath of collectGithubActionFiles(projectPath)) {
+    const relativePath = path.relative(projectPath, filePath);
+    try {
+      const original = fs.readFileSync(filePath, 'utf8');
+      const rewritten = original.replace(
+        SETUP_VP_V1_RE,
+        `$1$2voidzero-dev/setup-vp@${SETUP_VP_VERSION}$2`,
+      );
+      if (rewritten !== original) {
+        fs.writeFileSync(filePath, rewritten);
+        updatedFiles.push(relativePath);
+      }
+    } catch (error) {
+      warnMigration(
+        `Could not update the setup-vp version in ${relativePath}: ${error instanceof Error ? error.message : String(error)}`,
+        report,
+      );
+    }
+  }
+
+  if (report) {
+    report.setupVpVersionUpdatedFileCount += updatedFiles.length;
+  }
+  return updatedFiles;
 }
 
 /**

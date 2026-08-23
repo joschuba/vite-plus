@@ -8,7 +8,11 @@ import { parseAllDocuments, parse as parseYaml } from 'yaml';
 
 import { rewriteScripts } from '../../../binding/index.js';
 import { PackageManager } from '../../types/index.js';
-import { VITE_PLUS_OVERRIDE_PACKAGES, VITEST_VERSION } from '../../utils/constants.js';
+import {
+  SETUP_VP_VERSION,
+  VITE_PLUS_OVERRIDE_PACKAGES,
+  VITEST_VERSION,
+} from '../../utils/constants.js';
 import { createMigrationReport } from '../report.js';
 
 // Mock VITE_PLUS_VERSION to a stable value for snapshot tests.
@@ -40,6 +44,7 @@ const {
   parseNvmrcVersion,
   detectNodeVersionManagerFile,
   migrateNodeVersionManagerFile,
+  migrateSetupVpVersion,
   detectFramework,
   hasFrameworkShim,
   addFrameworkShim,
@@ -1443,6 +1448,76 @@ describe('setPackageManager', () => {
     expect(readPkg().devEngines).toEqual({
       packageManager: { name: 'pnpm', version: '11.5.1', onFail: 'download' },
     });
+  });
+});
+
+describe('migrateSetupVpVersion', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vp-test-setup-vp-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('updates exact v1 references in workflows and composite actions', () => {
+    const workflowsDir = path.join(tmpDir, '.github', 'workflows');
+    const actionDir = path.join(tmpDir, '.github', 'actions', 'setup');
+    fs.mkdirSync(path.join(workflowsDir, 'nested'), { recursive: true });
+    fs.mkdirSync(actionDir, { recursive: true });
+
+    const workflowPath = path.join(workflowsDir, 'ci.yml');
+    fs.writeFileSync(
+      workflowPath,
+      [
+        'steps:',
+        '  - uses: voidzero-dev/setup-vp@v1',
+        "  - uses: 'voidzero-dev/setup-vp@v1' # keep this comment",
+        '  - uses: "voidzero-dev/setup-vp@v1"',
+        '  - uses: voidzero-dev/setup-vp@v1.16.1',
+        '  - uses: voidzero-dev/setup-vp@v10',
+        '  - uses: voidzero-dev/setup-vp@313600b',
+        '  # - uses: voidzero-dev/setup-vp@v1',
+        '',
+      ].join('\r\n'),
+    );
+    const actionPath = path.join(actionDir, 'action.yaml');
+    fs.writeFileSync(actionPath, 'runs:\n  steps:\n    - uses : voidzero-dev/setup-vp@v1\n');
+    const nestedWorkflowPath = path.join(workflowsDir, 'nested', 'ignored.yml');
+    fs.writeFileSync(nestedWorkflowPath, '- uses: voidzero-dev/setup-vp@v1\n');
+    const report = createMigrationReport();
+
+    const updatedFiles = migrateSetupVpVersion(tmpDir, report).map((filePath) =>
+      filePath.split(path.sep).join('/'),
+    );
+
+    expect(updatedFiles).toHaveLength(2);
+    expect(updatedFiles).toEqual(
+      expect.arrayContaining(['.github/workflows/ci.yml', '.github/actions/setup/action.yaml']),
+    );
+    expect(fs.readFileSync(workflowPath, 'utf8')).toBe(
+      [
+        'steps:',
+        `  - uses: voidzero-dev/setup-vp@${SETUP_VP_VERSION}`,
+        `  - uses: 'voidzero-dev/setup-vp@${SETUP_VP_VERSION}' # keep this comment`,
+        `  - uses: "voidzero-dev/setup-vp@${SETUP_VP_VERSION}"`,
+        '  - uses: voidzero-dev/setup-vp@v1.16.1',
+        '  - uses: voidzero-dev/setup-vp@v10',
+        '  - uses: voidzero-dev/setup-vp@313600b',
+        '  # - uses: voidzero-dev/setup-vp@v1',
+        '',
+      ].join('\r\n'),
+    );
+    expect(fs.readFileSync(actionPath, 'utf8')).toContain(
+      `uses : voidzero-dev/setup-vp@${SETUP_VP_VERSION}`,
+    );
+    expect(fs.readFileSync(nestedWorkflowPath, 'utf8')).toContain('setup-vp@v1');
+    expect(report.setupVpVersionUpdatedFileCount).toBe(2);
+
+    expect(migrateSetupVpVersion(tmpDir, report)).toEqual([]);
+    expect(report.setupVpVersionUpdatedFileCount).toBe(2);
   });
 });
 
