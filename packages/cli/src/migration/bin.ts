@@ -595,9 +595,11 @@ function showMigrationSummary(options: {
   if (report.nodeVersionFileMigrated) {
     log(`${styleText('gray', '•')} Node version manager file migrated to .node-version`);
   }
-  if (report.setupVpVersionUpdatedFileCount > 0) {
+  const setupVpFileCount = report.setupVpVersionUpdatedFileCount;
+  if (setupVpFileCount > 0) {
+    const fileLabel = setupVpFileCount === 1 ? 'file' : 'files';
     log(
-      `${styleText('gray', '•')} setup-vp updated to ${SETUP_VP_VERSION} in ${report.setupVpVersionUpdatedFileCount} GitHub Actions ${report.setupVpVersionUpdatedFileCount === 1 ? 'file' : 'files'}`,
+      `${styleText('gray', '•')} setup-vp updated to ${SETUP_VP_VERSION} in ${setupVpFileCount} GitHub Actions ${fileLabel}`,
     );
   }
   if (report.wrappedPluginConfigCount > 0) {

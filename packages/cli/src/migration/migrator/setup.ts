@@ -11,7 +11,7 @@ import { SETUP_VP_VERSION } from '../../utils/constants.ts';
 import { editJsonFile } from '../../utils/json.ts';
 import { detectConfigs } from '../detector.ts';
 import { type MigrationReport } from '../report.ts';
-import { warnMigration } from './shared.ts';
+import { isPlainRecord, warnMigration } from './shared.ts';
 
 export function setPackageManager(
   projectDir: string,
@@ -134,40 +134,27 @@ const NODE_VERSION_FILE_NVMRC_RE = /(node-version-file:[ \t]*)(['"]?)(\.\/)?\.nv
 function isCompositeActionFile(filePath: string): boolean {
   try {
     const action = parseYaml(fs.readFileSync(filePath, 'utf8')) as unknown;
-    if (typeof action !== 'object' || action === null || Array.isArray(action)) {
-      return false;
-    }
-    const runs = (action as Record<string, unknown>).runs;
-    return (
-      typeof runs === 'object' &&
-      runs !== null &&
-      !Array.isArray(runs) &&
-      (runs as Record<string, unknown>).using === 'composite'
-    );
+    return isPlainRecord(action) && isPlainRecord(action.runs) && action.runs.using === 'composite';
   } catch {
     return false;
   }
 }
 
 /**
- * Collect GitHub Actions YAML files that migration may inspect: top-level
- * workflows (`.github/workflows/*.{yml,yaml}`, which GitHub runs only when flat
- * in that directory) and composite action definitions anywhere beneath
- * `.github`. Action metadata is included only when `runs.using` is `composite`.
- * Returns absolute paths. `nocase` keeps filename matching case-insensitive on
- * case-sensitive filesystems. Recursive discovery intentionally remains scoped
- * to the `.github` directory.
+ * Collect top-level workflows and composite action definitions under `.github`.
+ * Action metadata must declare `runs.using: composite`. Paths are absolute, and
+ * filename matching is case-insensitive.
  */
 function collectGithubActionFiles(projectPath: string): string[] {
-  const options = {
+  const globOptions = {
     cwd: path.join(projectPath, '.github'),
     absolute: true,
     nocase: true,
     nodir: true,
   } as const;
-  const workflows = globSync('workflows/*.{yml,yaml}', options);
+  const workflows = globSync('workflows/*.{yml,yaml}', globOptions);
   const compositeActions = globSync('**/action.{yml,yaml}', {
-    ...options,
+    ...globOptions,
     dot: true,
   }).filter(isCompositeActionFile);
 
