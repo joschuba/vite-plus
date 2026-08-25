@@ -255,9 +255,10 @@ Unrelated `bunx` commands and other package-executor forms remain unchanged.
 ## Continuous Integration Rules
 
 Migration replaces exact `voidzero-dev/setup-vp@v1` references in GitHub
-Actions workflows and composite actions with the latest exact `setup-vp`
-release known to that Vite+ version. The frozen `v1` tag does not receive new
-releases. Existing exact versions and commit SHAs are left unchanged.
+Actions workflows and composite actions under `.github` with the latest exact
+`setup-vp` release known to that Vite+ version. The frozen `v1` tag does not
+receive new releases. Existing exact versions and commit SHAs are left
+unchanged.
 
 ## Node.js Version Rules
 
@@ -270,8 +271,9 @@ migrations run it unconditionally.
   existing `.node-version` is kept.
 - When `.nvmrc` is removed, any `actions/setup-node` `node-version-file:
 .nvmrc` reference in `.github/workflows/*.{yml,yaml}` and composite actions
-  (`.github/actions/**/action.{yml,yaml}`) is repointed to `.node-version` so
-  CI does not fail with "node version file ... does not exist".
+  under `.github` (`.github/**/action.{yml,yaml}`) is repointed to
+  `.node-version` so CI does not fail with "node version file ... does not
+  exist".
 
 ## Package-Manager Rules
 

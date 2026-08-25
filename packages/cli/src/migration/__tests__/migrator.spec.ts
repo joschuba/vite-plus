@@ -1484,7 +1484,10 @@ describe('migrateSetupVpVersion', () => {
       ].join('\r\n'),
     );
     const actionPath = path.join(actionDir, 'action.yaml');
-    fs.writeFileSync(actionPath, 'runs:\n  steps:\n    - uses : voidzero-dev/setup-vp@v1\n');
+    fs.writeFileSync(
+      actionPath,
+      'runs:\n  using: composite\n  steps:\n    - uses : voidzero-dev/setup-vp@v1\n',
+    );
     const nestedWorkflowPath = path.join(workflowsDir, 'nested', 'ignored.yml');
     fs.writeFileSync(nestedWorkflowPath, '- uses: voidzero-dev/setup-vp@v1\n');
     const report = createMigrationReport();
@@ -1518,6 +1521,52 @@ describe('migrateSetupVpVersion', () => {
 
     expect(migrateSetupVpVersion(tmpDir, report)).toEqual([]);
     expect(report.setupVpVersionUpdatedFileCount).toBe(2);
+  });
+
+  it('updates composite actions elsewhere under .github and stays within that directory', () => {
+    const actionPath = path.join(tmpDir, '.github', 'ci', 'actions', 'setup', 'action.yml');
+    const nonCompositePath = path.join(
+      tmpDir,
+      '.github',
+      'ci',
+      'actions',
+      'javascript',
+      'action.yml',
+    );
+    const outsideScopePath = path.join(tmpDir, 'ci', 'actions', 'outside-scope', 'action.yml');
+    const compositeAction =
+      'runs:\n  using: composite\n  steps:\n    - uses: voidzero-dev/setup-vp@v1\n';
+    const nonCompositeAction = [
+      'inputs:',
+      '  example:',
+      '    description: Example workflow text',
+      '    default: |',
+      '      - uses: voidzero-dev/setup-vp@v1',
+      'runs:',
+      '  using: node20',
+      '  main: index.js',
+      '',
+    ].join('\n');
+
+    fs.mkdirSync(path.dirname(actionPath), { recursive: true });
+    fs.mkdirSync(path.dirname(nonCompositePath), { recursive: true });
+    fs.mkdirSync(path.dirname(outsideScopePath), { recursive: true });
+    fs.writeFileSync(actionPath, compositeAction);
+    fs.writeFileSync(nonCompositePath, nonCompositeAction);
+    fs.writeFileSync(outsideScopePath, compositeAction);
+    const report = createMigrationReport();
+
+    const updatedFiles = migrateSetupVpVersion(tmpDir, report).map((filePath) =>
+      filePath.split(path.sep).join('/'),
+    );
+
+    expect(updatedFiles).toEqual(['.github/ci/actions/setup/action.yml']);
+    expect(fs.readFileSync(actionPath, 'utf8')).toContain(
+      `uses: voidzero-dev/setup-vp@${SETUP_VP_VERSION}`,
+    );
+    expect(fs.readFileSync(nonCompositePath, 'utf8')).toBe(nonCompositeAction);
+    expect(fs.readFileSync(outsideScopePath, 'utf8')).toBe(compositeAction);
+    expect(report.setupVpVersionUpdatedFileCount).toBe(1);
   });
 });
 

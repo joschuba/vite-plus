@@ -4,6 +4,7 @@ import path from 'node:path';
 import * as prompts from '@voidzero-dev/vite-plus-prompts';
 import { globSync } from 'glob';
 import semver from 'semver';
+import { parse as parseYaml } from 'yaml';
 
 import { type DownloadPackageManagerResult } from '../../../binding/index.js';
 import { SETUP_VP_VERSION } from '../../utils/constants.ts';
@@ -130,20 +131,47 @@ export function parseNvmrcVersion(alias: string): string | null {
  */
 const NODE_VERSION_FILE_NVMRC_RE = /(node-version-file:[ \t]*)(['"]?)(\.\/)?\.nvmrc\2(?=\s|$)/gm;
 
+function isCompositeActionFile(filePath: string): boolean {
+  try {
+    const action = parseYaml(fs.readFileSync(filePath, 'utf8')) as unknown;
+    if (typeof action !== 'object' || action === null || Array.isArray(action)) {
+      return false;
+    }
+    const runs = (action as Record<string, unknown>).runs;
+    return (
+      typeof runs === 'object' &&
+      runs !== null &&
+      !Array.isArray(runs) &&
+      (runs as Record<string, unknown>).using === 'composite'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Collect GitHub Actions YAML files that migration may inspect: top-level
  * workflows (`.github/workflows/*.{yml,yaml}`, which GitHub runs only when flat
- * in that directory) and composite action definitions
- * (`.github/actions/**\/action.{yml,yaml}`, which may nest at any depth). Returns
- * absolute paths; a missing `.github` tree just yields an empty list. `nocase`
- * keeps the match case-insensitive on case-sensitive filesystems.
+ * in that directory) and composite action definitions anywhere beneath
+ * `.github`. Action metadata is included only when `runs.using` is `composite`.
+ * Returns absolute paths. `nocase` keeps filename matching case-insensitive on
+ * case-sensitive filesystems. Recursive discovery intentionally remains scoped
+ * to the `.github` directory.
  */
 function collectGithubActionFiles(projectPath: string): string[] {
-  return globSync(['workflows/*.{yml,yaml}', 'actions/**/action.{yml,yaml}'], {
+  const options = {
     cwd: path.join(projectPath, '.github'),
     absolute: true,
     nocase: true,
-  });
+    nodir: true,
+  } as const;
+  const workflows = globSync('workflows/*.{yml,yaml}', options);
+  const compositeActions = globSync('**/action.{yml,yaml}', {
+    ...options,
+    dot: true,
+  }).filter(isCompositeActionFile);
+
+  return [...new Set([...workflows, ...compositeActions])];
 }
 
 /**
