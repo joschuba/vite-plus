@@ -19,7 +19,7 @@ export const VITEST_VERSION = '4.1.11';
 
 // Exact action release used by generated workflows and the @v1 migration.
 // The Renovate custom manager keeps this value current.
-export const SETUP_VP_VERSION = 'v1.17.0';
+export const SETUP_VP_VERSION = 'v1.18.0';
 
 // Stable 0.22.x predates non-TTY support. The dependency upgrade script replaces
 // this RC with the matching stable version when the bundled tsdown version advances.
