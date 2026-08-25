@@ -12,7 +12,10 @@
 import { dirname, join } from 'node:path';
 
 import { DEFAULT_ENVS, resolve } from './utils/constants.ts';
-import { checkCoreVersionMatchOnce } from './utils/core-version-guard.ts';
+import {
+  checkCoreVersionMatchForResolver,
+  type CoreVersionResolverError,
+} from './utils/core-version-guard.ts';
 
 /**
  * Resolves the Vite binary path and environment variables.
@@ -30,12 +33,17 @@ export async function vite(
   // second argument, after the error slot.
   _err?: unknown,
   taskDir?: string,
-): Promise<{
-  binPath: string;
-  envs: Record<string, string>;
-}> {
-  // Fail fast on a `vite` alias that skews from the CLI (see core-version-guard.ts).
-  checkCoreVersionMatchOnce(taskDir);
+): Promise<
+  | CoreVersionResolverError
+  | {
+      binPath: string;
+      envs: Record<string, string>;
+    }
+> {
+  const versionError = checkCoreVersionMatchForResolver(taskDir);
+  if (versionError) {
+    return versionError;
+  }
 
   // Vite's CLI binary is located at bin/vite.js relative to the package root
   const vitePackagePath = dirname(resolve('@voidzero-dev/vite-plus-core'));

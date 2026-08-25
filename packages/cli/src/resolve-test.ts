@@ -14,7 +14,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { DEFAULT_ENVS, resolveBundled } from './utils/constants.ts';
-import { checkCoreVersionMatchOnce } from './utils/core-version-guard.ts';
+import {
+  checkCoreVersionMatchForResolver,
+  type CoreVersionResolverError,
+} from './utils/core-version-guard.ts';
 
 interface VitestPackageJson {
   bin?: string | Record<string, string>;
@@ -40,13 +43,17 @@ export async function test(
   // second argument, after the error slot.
   _err?: unknown,
   taskDir?: string,
-): Promise<{
-  binPath: string;
-  envs: Record<string, string>;
-}> {
-  // Fail fast before the bundled Vitest loads a skewed `vite` alias as its
-  // vite (see core-version-guard.ts).
-  checkCoreVersionMatchOnce(taskDir);
+): Promise<
+  | CoreVersionResolverError
+  | {
+      binPath: string;
+      envs: Record<string, string>;
+    }
+> {
+  const versionError = checkCoreVersionMatchForResolver(taskDir);
+  if (versionError) {
+    return versionError;
+  }
 
   const pkgJsonPath = resolveBundled('vitest/package.json');
   const pkgRoot = dirname(pkgJsonPath);

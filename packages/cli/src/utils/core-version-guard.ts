@@ -22,6 +22,16 @@ import { CLI_PACKAGE_VERSION, VITE_PLUS_CORE_PACKAGE_NAME } from './constants.ts
 import { detectPackageMetadata } from './package.ts';
 
 export const SKIP_CORE_VERSION_CHECK_ENV = 'VP_SKIP_CORE_VERSION_CHECK';
+export const CORE_VERSION_MISMATCH_ERROR_KIND = 'core-version-mismatch';
+
+export class CoreVersionMismatchError extends Error {
+  override readonly name = 'CoreVersionMismatchError';
+}
+
+export interface CoreVersionResolverError {
+  errorKind: typeof CORE_VERSION_MISMATCH_ERROR_KIND;
+  errorMessage: string;
+}
 
 /**
  * Throw when the project's aliased core version differs from the version the
@@ -37,14 +47,13 @@ export function assertCoreVersionMatch(
     // Keep every version inside a `@voidzero-dev/vite-plus-core@<x>` context:
     // the PTY snapshot redactor masks the CLI's own version only in that form
     // (a bare `vite-plus@<x>` stays verbatim and would churn every release).
-    throw new Error(
-      `The project's \`vite\` alias resolves to ${VITE_PLUS_CORE_PACKAGE_NAME}@${installedVersion}, ` +
-        `but this vite-plus CLI requires ${VITE_PLUS_CORE_PACKAGE_NAME}@${expectedVersion}: the two ` +
-        `packages are published in lockstep and other pairings are untested. A dependency ` +
-        `bot usually causes this by updating vite-plus and the \`vite\` alias in separate ` +
-        `PRs. Update the \`vite\` alias to npm:${VITE_PLUS_CORE_PACKAGE_NAME}@${expectedVersion} ` +
-        `where it is declared (catalog, overrides, resolutions, or dependencies), or run ` +
-        `\`vp migrate\` to realign it. Set ${SKIP_CORE_VERSION_CHECK_ENV}=1 to skip this check.`,
+    throw new CoreVersionMismatchError(
+      `Your \`vite\` alias uses ${VITE_PLUS_CORE_PACKAGE_NAME}@${installedVersion}.\n` +
+        `This Vite+ CLI requires ${VITE_PLUS_CORE_PACKAGE_NAME}@${expectedVersion}.\n\n` +
+        `Choose a fix:\n` +
+        `- Update the \`vite\` alias to npm:${VITE_PLUS_CORE_PACKAGE_NAME}@${expectedVersion}.\n` +
+        `- Run \`vp migrate\`.\n\n` +
+        `To skip this check, set ${SKIP_CORE_VERSION_CHECK_ENV}=1.`,
     );
   }
 }
@@ -82,10 +91,32 @@ const checkedDirs = new Set<string>();
  * runs (`defaultPackage`, `vp run -r`) execute in a package dir while the
  * Node process cwd stays at the invocation root.
  */
-export function checkCoreVersionMatchOnce(projectDir: string = process.cwd()): void {
+export function checkCoreVersionMatchOnce(
+  projectDir: string = process.cwd(),
+  expectedVersion: string = CLI_PACKAGE_VERSION,
+): void {
   if (checkedDirs.has(projectDir)) {
     return;
   }
+  checkCoreVersionMatch(projectDir, expectedVersion);
   checkedDirs.add(projectDir);
-  checkCoreVersionMatch(projectDir);
+}
+
+/** Return a tagged error that Rust can distinguish from resolver failures. */
+export function checkCoreVersionMatchForResolver(
+  projectDir: string = process.cwd(),
+  expectedVersion: string = CLI_PACKAGE_VERSION,
+): CoreVersionResolverError | undefined {
+  try {
+    checkCoreVersionMatchOnce(projectDir, expectedVersion);
+    return undefined;
+  } catch (error) {
+    if (error instanceof CoreVersionMismatchError) {
+      return {
+        errorKind: CORE_VERSION_MISMATCH_ERROR_KIND,
+        errorMessage: error.message,
+      };
+    }
+    throw error;
+  }
 }

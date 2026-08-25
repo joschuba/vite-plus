@@ -3569,10 +3569,16 @@ export declare function getVpDirs(): VpDirsJs;
  */
 export declare function hasConfigKey(viteConfigPath: string, configKey: string): boolean;
 
-/** Result returned by JavaScript resolver functions. */
+/**
+ * A command or tagged user error returned by a JavaScript resolver.
+ * Successful results contain `binPath` and `envs`. User errors contain
+ * `errorKind` and `errorMessage`.
+ */
 export interface JsCommandResolvedResult {
-  binPath: string;
-  envs: Record<string, string>;
+  binPath?: string;
+  envs?: Record<string, string>;
+  errorKind?: string;
+  errorMessage?: string;
 }
 
 /**
