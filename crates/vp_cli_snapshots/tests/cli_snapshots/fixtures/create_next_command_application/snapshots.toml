@@ -4,3 +4,11 @@ vp = "global"
 steps = [
   { argv = ["vp", "create", "vite:application", "--no-interactive"], comment = "verify next command suggests vp run", continue-on-failure = true },
 ]
+
+[[case]]
+name = "create_git_command_application"
+vp = "global"
+steps = [
+  { argv = ["vp", "create", "vite:application", "--no-interactive", "--git"], comment = "standalone create: Git command must not change the current directory", continue-on-failure = true },
+  { argv = ["vpt", "stat-file", "vite-plus-application/.git", "--assert", "dir"], comment = "Git repository initialized", continue-on-failure = true },
+]
