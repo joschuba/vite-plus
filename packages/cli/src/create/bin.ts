@@ -89,6 +89,7 @@ import {
   ensureDefaultGitignoreEntries,
   ensureGitignoreVsCodeEditorConfigs,
   formatTargetDir,
+  quoteShellArgument,
   shouldConfigureEditorsForCreate,
 } from './utils.ts';
 
@@ -242,7 +243,7 @@ function getNextCommand(projectDir: string, command: string) {
   if (!projectDir || projectDir === '.') {
     return command;
   }
-  return `cd ${projectDir} && ${command}`;
+  return `cd ${quoteShellArgument(projectDir)} && ${command}`;
 }
 
 function getCopilotSetupRoot(projectRoot: string, isExistingMonorepo: boolean) {
@@ -287,7 +288,8 @@ function showCreateSummary(options: {
     );
   }
   if (gitInitialized) {
-    const git = !projectDir || projectDir === '.' ? 'git' : `git -C ${projectDir}`;
+    const git =
+      !projectDir || projectDir === '.' ? 'git' : `git -C ${quoteShellArgument(projectDir)}`;
     const gitCommand = `${git} add -A && ${git} commit -m "chore: initial commit"`;
     log(`${styleText('blue', '→')} Git (optional): ${accent(gitCommand)}`);
   }

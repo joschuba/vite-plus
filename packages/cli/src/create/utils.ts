@@ -8,6 +8,25 @@ import { getRandomProjectName } from './random-name.ts';
 
 export type CreateEditorOption = string | false | undefined;
 
+const POSIX_SAFE_SHELL_ARGUMENT = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const WINDOWS_SAFE_SHELL_ARGUMENT = /^[A-Za-z0-9_@+=:,./-]+$/;
+
+/** Quote one create target-directory argument for the platform shell. */
+export function quoteShellArgument(
+  argument: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const safeArgument =
+    platform === 'win32' ? WINDOWS_SAFE_SHELL_ARGUMENT : POSIX_SAFE_SHELL_ARGUMENT;
+  if (argument && safeArgument.test(argument)) {
+    return argument;
+  }
+  if (platform === 'win32') {
+    return `"${argument.replaceAll('"', '\\"')}"`;
+  }
+  return `'${argument.replaceAll("'", "'\"'\"'")}'`;
+}
+
 function hasExplicitEditorOptIn(editor: CreateEditorOption): boolean {
   return typeof editor === 'string' && editor.trim() !== '';
 }

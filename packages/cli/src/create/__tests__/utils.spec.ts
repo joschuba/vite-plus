@@ -10,6 +10,7 @@ import {
   ensureGitignoreVsCodeEditorConfigs,
   formatTargetDir,
   getProjectDirFromPackageName,
+  quoteShellArgument,
   renameFiles,
   shouldConfigureEditorsForCreate,
 } from '../utils.js';
@@ -88,6 +89,31 @@ describe('formatTargetDir', () => {
   it('should format target dir with invalid package name', () => {
     expect(formatTargetDir('my-package@').error).matchSnapshot();
     expect(formatTargetDir('my-package@1.0.0').error).matchSnapshot();
+  });
+});
+
+describe('quoteShellArgument', () => {
+  it('does not quote safe arguments', () => {
+    expect(quoteShellArgument('examples/my-app', 'linux')).toBe('examples/my-app');
+    expect(quoteShellArgument('examples/my-app', 'win32')).toBe('examples/my-app');
+  });
+
+  it('uses POSIX quoting for spaces and shell metacharacters', () => {
+    expect(quoteShellArgument('examples with spaces/my-app', 'linux')).toBe(
+      "'examples with spaces/my-app'",
+    );
+    expect(quoteShellArgument('examples;touch pwned/my-app', 'linux')).toBe(
+      "'examples;touch pwned/my-app'",
+    );
+  });
+
+  it('uses Windows quoting for spaces and shell metacharacters', () => {
+    expect(quoteShellArgument('examples with spaces/my-app', 'win32')).toBe(
+      '"examples with spaces/my-app"',
+    );
+    expect(quoteShellArgument('examples & tools/my-app', 'win32')).toBe(
+      '"examples & tools/my-app"',
+    );
   });
 });
 
