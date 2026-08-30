@@ -14,10 +14,9 @@ steps = [
 ]
 
 [[case]]
-name = "create_git_command_application_with_spaces"
+name = "create_rejects_unsafe_target_directories"
 vp = "global"
-skip-platforms = ["windows"]
 steps = [
-  { argv = ["vp", "create", "vite:application", "--no-interactive", "--git", "--directory", "examples with spaces/my-app"], comment = "standalone create: quote a nested target directory that contains spaces", continue-on-failure = true },
-  { argv = ["vpt", "stat-file", "examples with spaces/my-app/.git", "--assert", "dir"], comment = "Git repository initialized in the quoted target directory", continue-on-failure = true },
+  { argv = ["vp", "create", "vite:application", "--no-interactive", "--git", "--directory", "examples with spaces/my-app"], comment = "reject whitespace in a nested target directory", continue-on-failure = true },
+  { argv = ["vp", "create", "vite:application", "--no-interactive", "--git", "--directory", "examples;touch-pwned/my-app"], comment = "reject shell metacharacters in a nested target directory", continue-on-failure = true },
 ]

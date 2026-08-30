@@ -10,7 +10,6 @@ import {
   ensureGitignoreVsCodeEditorConfigs,
   formatTargetDir,
   getProjectDirFromPackageName,
-  quoteShellArgument,
   renameFiles,
   shouldConfigureEditorsForCreate,
 } from '../utils.js';
@@ -90,29 +89,13 @@ describe('formatTargetDir', () => {
     expect(formatTargetDir('my-package@').error).matchSnapshot();
     expect(formatTargetDir('my-package@1.0.0').error).matchSnapshot();
   });
-});
 
-describe('quoteShellArgument', () => {
-  it('does not quote safe arguments', () => {
-    expect(quoteShellArgument('examples/my-app', 'linux')).toBe('examples/my-app');
-    expect(quoteShellArgument('examples/my-app', 'win32')).toBe('examples/my-app');
-  });
-
-  it('uses POSIX quoting for spaces and shell metacharacters', () => {
-    expect(quoteShellArgument('examples with spaces/my-app', 'linux')).toBe(
-      "'examples with spaces/my-app'",
+  it('rejects whitespace and shell metacharacters in parent directories', () => {
+    expect(formatTargetDir('examples with spaces/my-app').error).toBe(
+      'Target directory cannot contain whitespace',
     );
-    expect(quoteShellArgument('examples;touch pwned/my-app', 'linux')).toBe(
-      "'examples;touch pwned/my-app'",
-    );
-  });
-
-  it('uses Windows quoting for spaces and shell metacharacters', () => {
-    expect(quoteShellArgument('examples with spaces/my-app', 'win32')).toBe(
-      '"examples with spaces/my-app"',
-    );
-    expect(quoteShellArgument('examples & tools/my-app', 'win32')).toBe(
-      '"examples & tools/my-app"',
+    expect(formatTargetDir('examples;touch-pwned/my-app').error).toBe(
+      'Target directory contains unsupported characters',
     );
   });
 });
