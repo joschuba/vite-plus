@@ -287,10 +287,8 @@ function showCreateSummary(options: {
     );
   }
   if (gitInitialized) {
-    const gitCommand = getNextCommand(
-      projectDir,
-      'git add -A && git commit -m "chore: initial commit"',
-    );
+    const git = !projectDir || projectDir === '.' ? 'git' : `git -C ${projectDir}`;
+    const gitCommand = `${git} add -A && ${git} commit -m "chore: initial commit"`;
     log(`${styleText('blue', '→')} Git (optional): ${accent(gitCommand)}`);
   }
   log(`${styleText('blue', '→')} Next: ${accent(nextCommand)}`);
