@@ -7,6 +7,7 @@ bundled monorepo: extract tarball, scaffold, inject create.defaultTemplate
 ```
 ◇ Scaffolded my-mono
 • Node <version>  pnpm <version>
+→ Git (optional): cd my-mono && git add -A && git commit -m "chore: initial commit"
 → Next: cd my-mono && vp run
 ```
 
