@@ -242,7 +242,12 @@ function getNextCommand(projectDir: string, command: string) {
   if (!projectDir || projectDir === '.') {
     return command;
   }
-  return `cd ${projectDir} && ${command}`;
+  return `cd ${formatProjectDirArgument(projectDir)} && ${command}`;
+}
+
+function formatProjectDirArgument(projectDir: string) {
+  const argument = projectDir.startsWith('-') ? `./${projectDir}` : projectDir;
+  return /^[A-Za-z0-9_@./-]+$/.test(argument) ? argument : JSON.stringify(argument);
 }
 
 function getCopilotSetupRoot(projectRoot: string, isExistingMonorepo: boolean) {
@@ -287,7 +292,10 @@ function showCreateSummary(options: {
     );
   }
   if (gitInitialized) {
-    const git = !projectDir || projectDir === '.' ? 'git' : `git -C ${projectDir}`;
+    const git =
+      !projectDir || projectDir === '.'
+        ? 'git'
+        : `git -C ${formatProjectDirArgument(projectDir)}`;
     const gitCommand = `${git} add -A && ${git} commit -m "chore: initial commit"`;
     log(`${styleText('blue', '→')} Git (optional): ${accent(gitCommand)}`);
   }

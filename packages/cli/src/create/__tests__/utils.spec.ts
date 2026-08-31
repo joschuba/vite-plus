@@ -90,13 +90,15 @@ describe('formatTargetDir', () => {
     expect(formatTargetDir('my-package@1.0.0').error).matchSnapshot();
   });
 
-  it('reports the first unsupported character in parent directories', () => {
-    expect(formatTargetDir('examples with spaces/my-app').error).toBe(
-      'Target directory contains unsupported character: " "',
-    );
-    expect(formatTargetDir('examples;touch-pwned/my-app').error).toBe(
-      'Target directory contains unsupported character: ";"',
-    );
+  it('keeps valid package names under parent directories that need shell quoting', () => {
+    expect(formatTargetDir('examples with spaces/my-app')).toEqual({
+      directory: 'examples with spaces/my-app',
+      packageName: 'my-app',
+    });
+    expect(formatTargetDir('examples;tools/my-app')).toEqual({
+      directory: 'examples;tools/my-app',
+      packageName: 'my-app',
+    });
   });
 });
 

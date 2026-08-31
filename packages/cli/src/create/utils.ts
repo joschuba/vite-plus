@@ -96,15 +96,6 @@ export function formatTargetDir(input: string): {
       error: 'Relative path contains ".." which is not allowed',
     };
   }
-  const parentDir = parsed.dir.replaceAll(path.sep, '');
-  const unsupportedCharacter = parentDir.match(/[^A-Za-z0-9_@.-]/)?.[0];
-  if (unsupportedCharacter) {
-    return {
-      directory: '',
-      packageName: '',
-      error: `Target directory contains unsupported character: ${JSON.stringify(unsupportedCharacter)}`,
-    };
-  }
   let packageName = parsed.base;
   const parentName = path.basename(parsed.dir);
   if (parentName.startsWith('@')) {
