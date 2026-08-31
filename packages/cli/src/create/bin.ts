@@ -293,9 +293,7 @@ function showCreateSummary(options: {
   }
   if (gitInitialized) {
     const git =
-      !projectDir || projectDir === '.'
-        ? 'git'
-        : `git -C ${formatProjectDirArgument(projectDir)}`;
+      !projectDir || projectDir === '.' ? 'git' : `git -C ${formatProjectDirArgument(projectDir)}`;
     const gitCommand = `${git} add -A && ${git} commit -m "chore: initial commit"`;
     log(`${styleText('blue', '→')} Git (optional): ${accent(gitCommand)}`);
   }
