@@ -96,12 +96,12 @@ export function formatTargetDir(input: string): {
       error: 'Relative path contains ".." which is not allowed',
     };
   }
-  const portableTargetDir = targetDir.split(path.sep).join('/');
-  if (!/^[A-Za-z0-9_@./-]+$/.test(portableTargetDir)) {
+  const parentDir = parsed.dir.replaceAll(path.sep, '');
+  if (!/^[A-Za-z0-9_@.-]*$/.test(parentDir)) {
     return {
       directory: '',
       packageName: '',
-      error: /\s/.test(portableTargetDir)
+      error: /\s/.test(parsed.dir)
         ? 'Target directory cannot contain whitespace'
         : 'Target directory contains unsupported characters',
     };
