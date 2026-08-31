@@ -247,7 +247,7 @@ function getNextCommand(projectDir: string, command: string) {
 
 function formatProjectDirArgument(projectDir: string) {
   const argument = projectDir.startsWith('-') ? `./${projectDir}` : projectDir;
-  return /^[A-Za-z0-9_@./-]+$/.test(argument) ? argument : JSON.stringify(argument);
+  return /^[A-Za-z0-9_@./\\-]+$/.test(argument) ? argument : JSON.stringify(argument);
 }
 
 function getCopilotSetupRoot(projectRoot: string, isExistingMonorepo: boolean) {
