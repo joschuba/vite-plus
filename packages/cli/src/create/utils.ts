@@ -97,13 +97,12 @@ export function formatTargetDir(input: string): {
     };
   }
   const parentDir = parsed.dir.replaceAll(path.sep, '');
-  if (!/^[A-Za-z0-9_@.-]*$/.test(parentDir)) {
+  const unsupportedCharacter = parentDir.match(/[^A-Za-z0-9_@.-]/)?.[0];
+  if (unsupportedCharacter) {
     return {
       directory: '',
       packageName: '',
-      error: /\s/.test(parsed.dir)
-        ? 'Target directory cannot contain whitespace'
-        : 'Target directory contains unsupported characters',
+      error: `Target directory contains unsupported character: ${JSON.stringify(unsupportedCharacter)}`,
     };
   }
   let packageName = parsed.base;

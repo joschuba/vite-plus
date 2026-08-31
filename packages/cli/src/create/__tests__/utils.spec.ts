@@ -90,12 +90,12 @@ describe('formatTargetDir', () => {
     expect(formatTargetDir('my-package@1.0.0').error).matchSnapshot();
   });
 
-  it('rejects whitespace and shell metacharacters in parent directories', () => {
+  it('reports the first unsupported character in parent directories', () => {
     expect(formatTargetDir('examples with spaces/my-app').error).toBe(
-      'Target directory cannot contain whitespace',
+      'Target directory contains unsupported character: " "',
     );
     expect(formatTargetDir('examples;touch-pwned/my-app').error).toBe(
-      'Target directory contains unsupported characters',
+      'Target directory contains unsupported character: ";"',
     );
   });
 });

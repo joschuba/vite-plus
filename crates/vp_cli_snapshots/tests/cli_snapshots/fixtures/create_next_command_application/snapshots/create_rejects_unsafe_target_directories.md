@@ -8,7 +8,7 @@ reject whitespace in a nested target directory
 
 ```
 
-Target directory cannot contain whitespace
+Target directory contains unsupported character: " "
 The --directory option is invalid
 ```
 
@@ -20,6 +20,6 @@ reject shell metacharacters in a nested target directory
 
 ```
 
-Target directory contains unsupported characters
+Target directory contains unsupported character: ";"
 The --directory option is invalid
 ```
